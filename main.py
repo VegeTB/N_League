@@ -83,7 +83,7 @@ class MahjongPlugin(Star):
         
         yield event.plain_result(
             "🀄️ 对局室已建立！\n"
-            "请4位参赛者发送 /mj_join 加入比赛。\n"
+            "请4位参赛者发送 /加入对局 加入比赛。\n"
             "人满后自动开始记录。"
         )
 
