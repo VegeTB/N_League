@@ -128,6 +128,22 @@ class MahjongPlugin(Star):
         else:
             yield event.plain_result(f"👋 {user_name} 加入成功 ({current_count}/4)")
 
+    @command("mj_cancel", alias=["取消对局", "撤销对局", "关闭对局"])
+    async def cancel_match(self, event: AstrMessageEvent):
+        """取消当前正在招募或进行的对局"""
+        ctx_id = self._get_context_id(event)
+
+        if ctx_id in self.active_matches:
+            status = self.active_matches[ctx_id]["status"]
+            del self.active_matches[ctx_id]
+            
+            if status == "recruiting":
+                yield event.plain_result("🚫 已关闭当前的对局招募。")
+            else:
+                yield event.plain_result("🚫 已强制中止当前对局，本局数据不予记录。")
+        else:
+            yield event.plain_result("⚠️ 当前没有正在进行的对局。")
+
     @command("mj_end", alias=["对局结束", "得点"])
     async def end_match(self, event: AstrMessageEvent, score: int):
         """提交点数并尝试结算"""
