@@ -122,7 +122,7 @@ class MahjongPlugin(Star):
             yield event.plain_result(
                 f"✅ 4人集结完毕，对局开始！\n{players_list}\n\n"
                 "🏁 对局结束后，请每位玩家发送：\n"
-                "/mj_end [点数] (例如: /mj_end 35000)\n"
+                "/得点 [点数] (例如: /mj_end 35000)\n"
                 "当4人都提交后将自动结算。"
             )
         else:
@@ -148,66 +148,82 @@ class MahjongPlugin(Star):
             yield event.plain_result("⚠️ 你不是本局参赛者，无法提交成绩。")
             return
 
-        # 记录分数
+        # 记录分数 (允许覆盖)
         match["scores"][user_id] = score
         submitted_count = len(match["scores"])
         
-        yield event.plain_result(f"💾 分数已记录 ({submitted_count}/4)")
-
         # 检查是否满4人数据
         if submitted_count == 4:
-            # 修复了 yield from 报错，改用 for 循环 yield
+            # --- 新增：10万点检查逻辑 ---
+            total_score = sum(match["scores"].values())
+            
+            if total_score != 100000:
+                diff = total_score - 100000
+                diff_str = f"+{diff}" if diff > 0 else f"{diff}"
+                
+                # 构建当前提交详情，方便查错
+                details = []
+                for uid, s in match["scores"].items():
+                    name = match["players"][uid]
+                    details.append(f"{name}: {s}")
+                details_str = "\n".join(details)
+                
+                yield event.plain_result(
+                    f"⚠️ **点数核算失败**\n"
+                    f"四家得点之和为 {total_score} (误差 {diff_str})\n"
+                    f"目标: 100000\n"
+                    f"----------------\n"
+                    f"当前提交:\n{details_str}\n"
+                    f"----------------\n"
+                    f"👉 请发现输入错误的玩家重新发送 /mj_end [正确点数] 进行修正。"
+                )
+                return # 终止结算，保留 active_matches 状态
+
+            # --- 校验通过，开始结算 ---
+            yield event.plain_result("✅ 点数核对无误 (100000)，正在结算...")
+            
             for item in self._finalize_match(event, ctx_id, match):
                 yield item
+        else:
+            yield event.plain_result(f"💾 分数已记录 ({submitted_count}/4)")
 
     def _finalize_match(self, event, ctx_id, match):
         """结算对局核心逻辑"""
-        # 1. 排序确定位次 (按分数降序)
         sorted_scores = sorted(match["scores"].items(), key=lambda x: x[1], reverse=True)
         
-        # 2. 计算PT并更新生涯数据
         ctx_data = self.data.setdefault(ctx_id, {})
         result_msg = ["🀄️ **本局结算**"]
         
         for rank_idx, (uid, score) in enumerate(sorted_scores):
-            rank = rank_idx + 1 # 1, 2, 3, 4
+            rank = rank_idx + 1
             username = match["players"][uid]
             
-            # 计算本场PT
             pt_change = self._calculate_pt_custom(score, rank)
             pt_str = f"+{pt_change}" if pt_change > 0 else f"{pt_change}"
             
-            # 更新生涯数据
             user_stat = ctx_data.setdefault(uid, {
                 "name": username,
                 "total_pt": 0.0,
                 "total_matches": 0,
-                "ranks": [0, 0, 0, 0], # [1位次数, 2位, 3位, 4位]
+                "ranks": [0, 0, 0, 0],
                 "max_score": 0,
                 "avoid_4_rate": 0.0
             })
             
-            # 更新名字（防止改名）
             user_stat["name"] = username
-            
-            # 基础累加
             user_stat["total_pt"] = round(user_stat["total_pt"] + pt_change, 1)
             user_stat["total_matches"] += 1
             user_stat["ranks"][rank-1] += 1
             
-            # 更新最高得点
             if score > user_stat["max_score"]:
                 user_stat["max_score"] = score
             
-            # 更新避四率 (非4位次数 / 总场数)
             not_4th_count = sum(user_stat["ranks"][:3])
             user_stat["avoid_4_rate"] = round((not_4th_count / user_stat["total_matches"]) * 100, 2)
             
-            # 构建输出消息
             icon = ["🥇", "🥈", "🥉", "💀"][rank-1]
             result_msg.append(f"{icon} {username}: {score} ({pt_str}pt)")
 
-        # 3. 保存并清除缓存
         self._save_data()
         del self.active_matches[ctx_id]
         
