@@ -213,7 +213,7 @@ class MahjongPlugin(Star):
         
         yield event.plain_result("\n".join(result_msg))
 
-    @command("mj_chombo", alias=["冲和", "错和", "罚分"])
+    @command("mj_chombo", alias=["冲和", "错和", "罚分", "chombo"])
     async def chombo(self, event: AstrMessageEvent):
         """
         错和处罚：扣除指定用户 20pt
