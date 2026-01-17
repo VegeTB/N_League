@@ -163,8 +163,8 @@ class MahjongPlugin(Star):
         yield event.plain_result(f"💾 分数已记录 ({submitted_count}/4)")
 
         # 检查是否满4人数据
-        if submitted_count == 4:
-            yield from self._finalize_match(event, ctx_id, match)
+            for item in self._finalize_match(event, ctx_id, match):
+                yield item
 
     def _finalize_match(self, event, ctx_id, match):
         """结算对局核心逻辑"""
