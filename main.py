@@ -13,7 +13,7 @@ DATA_DIR = os.path.join("data", "plugins", "astrbot_mahjong_plugin")
 os.makedirs(DATA_DIR, exist_ok=True)
 DATA_FILE = os.path.join(DATA_DIR, "mahjong_data.json")
 
-@register("N_league", "Vege", "日麻对局记录插件", "1.0.0")
+@register("N_league", "Vege", "日麻对局记录插件", "1.1.0")
 class MahjongPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
