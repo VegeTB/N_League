@@ -12,6 +12,7 @@ DATA_DIR = os.path.join("data", "plugins", "astrbot_mahjong_plugin")
 os.makedirs(DATA_DIR, exist_ok=True)
 DATA_FILE = os.path.join(DATA_DIR, "mahjong_data.json")
 
+@register("N_league", "Vege", "日麻对局记录插件", "1.0.0")
 class MahjongPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
@@ -45,38 +46,28 @@ class MahjongPlugin(Star):
             return f"private_{event.user_id}"
         return "default_ctx"
 
-    def _calculate_pt(self, score: int, rank: int) -> float:
-        """
-        计算PT逻辑 (默认 M-League 规则)
-        原点: 30000
-        马点: 1位+30, 2位+10, 3位-10, 4位-30
-        公式: (得点 - 30000) / 1000 + 马点
-        注意: 这里未包含"冈"点(Oka)，如果您规则有首位赏(Oka)，请在此处添加
-        """
-        base_pt = (score - 30000) / 1000.0
-        uma = [0, 50.0, 10.0, -10.0, -30.0] # 占位符, 1位对应索引1
-        
-        # M-League 实际上是 (Score - 30000)/1000 + Uma
-        # Uma: 1st(+50), 2nd(+10), 3rd(-10), 4th(-30)
-        # 包含了+20的Oka在首位uma里
-        
-        final_pt = base_pt + (uma[rank] - (30 if rank == 1 else 0)) # 修正基础计算
-        # 简单写法：
-        simple_uma = {1: 50.0, 2: 10.0, 3: -10.0, 4: -30.0}
-        return round(base_pt + (simple_uma.get(rank, 0) - (20.0 if rank == 1 else 0)), 1)
-    
     def _calculate_pt_custom(self, score: int, rank: int) -> float:
         """
-        示例：通用计算逻辑
-        Rank 1: (Score - 30000)/1000 + 15 (马) + 20 (冈) = +35 + (Score-30000)/1000
+        计算PT逻辑 (默认 M-League 规则)
         请根据您的群规修改此处
-        这里默认使用 M-League 规则实现
         """
         # M-League 规则: (Score - 30000) / 1000 + Uma
         # Uma: +30 / +10 / -10 / -30
-        uma_map = {1: 30.0, 2: 10.0, 3: -10.0, 4: -30.0}
-        pt = (score - 30000) / 1000.0 + uma_map[rank]
-        return round(pt, 1)
+        uma_map = {1: 50.0, 2: 10.0, 3: -10.0, 4: -30.0}
+        # 注意：rank 1 的 50.0 包含了 (30马点 + 20冈)
+        # 如果您的规则是 (Score - 30000)/1000 + 马点(15/5/-5/-15) + 25000原点，请自行调整
+        
+        # M-League计算公式：((得分 - 30000) / 1000) + 马点
+        # 实际上 M-League 1位马点是+50 (含oka)，2位+10，3位-10，4位-30
+        pt = (score - 30000) / 1000.0 + (uma_map.get(rank, 0) - (20.0 if rank == 1 else 0))
+        # 修正: 上面的写法有点乱，直接写死 M-League 最终值方便理解
+        # 1位: (Score-30000)/1000 + 50
+        # 2位: (Score-30000)/1000 + 10
+        # 3位: (Score-30000)/1000 - 10
+        # 4位: (Score-30000)/1000 - 30
+        
+        final_uma = {1: 50.0, 2: 10.0, 3: -10.0, 4: -30.0}
+        return round((score - 30000) / 1000.0 + final_uma[rank], 1)
 
     @command("mj_start", alias=["对局开始", "开房"])
     async def start_match(self, event: AstrMessageEvent):
@@ -103,7 +94,7 @@ class MahjongPlugin(Star):
         user_name = event.get_sender_name()
 
         if ctx_id not in self.active_matches:
-            yield event.plain_result("⚠️ 当前没有正在招募的对局，请先发送 /对局开始")
+            yield event.plain_result("⚠️ 当前没有正在招募的对局，请先发送 /mj_start")
             return
 
         match = self.active_matches[ctx_id]
@@ -129,14 +120,14 @@ class MahjongPlugin(Star):
             players_list = "\n".join([f"- {name}" for name in match["players"].values()])
             yield event.plain_result(
                 f"✅ 4人集结完毕，对局开始！\n{players_list}\n\n"
-                "🏁 对局结束后，请每位选手发送：\n"
-                "/得点 [点数] (例如: /mj_end 35000)\n"
+                "🏁 对局结束后，请每位玩家发送：\n"
+                "/mj_end [点数] (例如: /mj_end 35000)\n"
                 "当4人都提交后将自动结算。"
             )
         else:
             yield event.plain_result(f"👋 {user_name} 加入成功 ({current_count}/4)")
 
-@command("mj_end", alias=["对局结束", "得点"])
+    @command("mj_end", alias=["对局结束", "得点"])
     async def end_match(self, event: AstrMessageEvent, score: int):
         """提交点数并尝试结算"""
         ctx_id = self._get_context_id(event)
@@ -164,14 +155,13 @@ class MahjongPlugin(Star):
 
         # 检查是否满4人数据
         if submitted_count == 4:
-            # 【修正处】改为循环 yield
+            # 修复了 yield from 报错，改用 for 循环 yield
             for item in self._finalize_match(event, ctx_id, match):
                 yield item
 
     def _finalize_match(self, event, ctx_id, match):
         """结算对局核心逻辑"""
         # 1. 排序确定位次 (按分数降序)
-        # data format: [(uid, score), ...]
         sorted_scores = sorted(match["scores"].items(), key=lambda x: x[1], reverse=True)
         
         # 2. 计算PT并更新生涯数据
@@ -222,7 +212,7 @@ class MahjongPlugin(Star):
         
         yield event.plain_result("\n".join(result_msg))
 
-    @command("mj_rank", alias=["rank", "数据"])
+    @command("mj_rank", alias=["rank", "排行", "Rank", "RANK"])
     async def show_rank(self, event: AstrMessageEvent, query_type: str):
         """
         查询排行榜
@@ -269,22 +259,19 @@ class MahjongPlugin(Star):
             return
 
         msg_lines = [msg_header]
+        
+        # 修复: 移除 [:15] 限制，显示所有玩家
         for i, (uid, data) in enumerate(sorted_users): 
             stats_str = formatter(data)
             msg_lines.append(f"{i+1}. {data['name']} — {stats_str} [试合:{data['total_matches']}]")
 
         yield event.plain_result("\n".join(msg_lines))
-        
+
     @command("mj_reset", alias=["新赛季"])
     async def reset_season(self, event: AstrMessageEvent):
         """重置当前群组的所有数据（开启新赛季）"""
         ctx_id = self._get_context_id(event)
-        sender_id = event.get_sender_id()
         
-        # 简单的权限检查，防止误删 (实际生产环境建议检查是否为管理员)
-        # 这里仅做确认机制
-        
-        # 注意：此处直接清空。若需备份，请手动操作JSON文件。
         if ctx_id in self.data:
             self.data[ctx_id] = {}
             self._save_data()
