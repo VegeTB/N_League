@@ -1,8 +1,6 @@
-# helloworld
+#N.League
 
-AstrBot 插件模板
-
-A template plugin for AstrBot plugin feature
+懒得写readme。
 
 # 支持
 
