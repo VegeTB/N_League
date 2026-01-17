@@ -136,7 +136,7 @@ class MahjongPlugin(Star):
         else:
             yield event.plain_result(f"👋 {user_name} 加入成功 ({current_count}/4)")
 
-    @command("mj_end", alias=["对局结束", "得点"])
+@command("mj_end", alias=["对局结束", "得点"])
     async def end_match(self, event: AstrMessageEvent, score: int):
         """提交点数并尝试结算"""
         ctx_id = self._get_context_id(event)
@@ -163,6 +163,8 @@ class MahjongPlugin(Star):
         yield event.plain_result(f"💾 分数已记录 ({submitted_count}/4)")
 
         # 检查是否满4人数据
+        if submitted_count == 4:
+            # 【修正处】改为循环 yield
             for item in self._finalize_match(event, ctx_id, match):
                 yield item
 
