@@ -1,6 +1,7 @@
 from astrbot.api.all import *
 from astrbot.api.event.filter import command
 import json
+from astrbot.api.message_components import At
 import os
 import logging
 from typing import Dict, List, Any
@@ -211,6 +212,53 @@ class MahjongPlugin(Star):
         del self.active_matches[ctx_id]
         
         yield event.plain_result("\n".join(result_msg))
+
+    @command("mj_chombo", alias=["冲和", "错和", "罚分"])
+    async def chombo(self, event: AstrMessageEvent):
+        """
+        错和处罚：扣除指定用户 20pt
+        用法: /mj_chombo @用户
+        """
+        ctx_id = self._get_context_id(event)
+        
+        # 1. 解析被 @ 的用户
+        target_uid = None
+        for comp in event.get_messages():
+            if isinstance(comp, At):
+                target_uid = str(comp.qq)
+                break
+        
+        if not target_uid:
+            yield event.plain_result("⚠️ 格式错误，请 @ 需要处罚的用户。\n示例: /mj_chombo @某人")
+            return
+
+        # 2. 获取数据 (如果不存在则初始化，防止报错)
+        ctx_data = self.data.setdefault(ctx_id, {})
+        
+        if target_uid not in ctx_data:
+            # 初始化新用户
+            ctx_data[target_uid] = {
+                "name": f"用户{target_uid}", # 没玩过对局的人没有记录名字，用ID暂代
+                "total_pt": 0.0,
+                "total_matches": 0,
+                "ranks": [0, 0, 0, 0],
+                "max_score": 0,
+                "avoid_4_rate": 0.0
+            }
+        
+        user_data = ctx_data[target_uid]
+        
+        # 3. 执行处罚 (-20pt)
+        user_data["total_pt"] = round(user_data["total_pt"] - 20.0, 1)
+        
+        self._save_data()
+        
+        yield event.plain_result(
+            f"🚫 **Chombo 处罚执行**\n"
+            f"对象: {user_data['name']}\n"
+            f"惩罚: -20 pt\n"
+            f"当前 PT: {user_data['total_pt']}"
+        )
 
     @command("mj_rank", alias=["rank", "排行", "Rank", "RANK"])
     async def show_rank(self, event: AstrMessageEvent, query_type: str):
