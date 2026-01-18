@@ -330,7 +330,7 @@ class MahjongPlugin(Star):
             for uid, data in users:
                 raw_pt = data["total_pt"]
                 matches = data["total_matches"]
-                penalty = max(0, 18 - matches) * 50
+                penalty = max(0, 20 - matches) * 50
                 ranking_pt = raw_pt - penalty
                 ranked_list.append((uid, data, ranking_pt, penalty))
             
