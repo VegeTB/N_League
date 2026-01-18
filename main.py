@@ -49,23 +49,13 @@ class MahjongPlugin(Star):
 
     def _calculate_pt_custom(self, score: int, rank: int) -> float:
         """
-        计算PT逻辑 (默认 M-League 规则)
-        请根据您的群规修改此处
+        计算PT逻辑
         """
         # M-League 规则: (Score - 30000) / 1000 + Uma
-        # Uma: +30 / +10 / -10 / -30
         uma_map = {1: 50.0, 2: 10.0, 3: -10.0, 4: -30.0}
-        # 注意：rank 1 的 50.0 包含了 (30马点 + 20冈)
-        # 如果您的规则是 (Score - 30000)/1000 + 马点(15/5/-5/-15) + 25000原点，请自行调整
         
         # M-League计算公式：((得分 - 30000) / 1000) + 马点
-        # 实际上 M-League 1位马点是+50 (含oka)，2位+10，3位-10，4位-30
         pt = (score - 30000) / 1000.0 + (uma_map.get(rank, 0) - (20.0 if rank == 1 else 0))
-        # 修正: 上面的写法有点乱，直接写死 M-League 最终值方便理解
-        # 1位: (Score-30000)/1000 + 50
-        # 2位: (Score-30000)/1000 + 10
-        # 3位: (Score-30000)/1000 - 10
-        # 4位: (Score-30000)/1000 - 30
         
         final_uma = {1: 50.0, 2: 10.0, 3: -10.0, 4: -30.0}
         return round((score - 30000) / 1000.0 + final_uma[rank], 1)
@@ -82,7 +72,7 @@ class MahjongPlugin(Star):
         }
         
         yield event.plain_result(
-            "🀄️ 对局室已建立！\n"
+            "🀄️ 对局已建立！\n"
             "请4位参赛者发送 /加入对局 加入比赛。\n"
             "人满后自动开始记录。"
         )
@@ -93,6 +83,7 @@ class MahjongPlugin(Star):
         ctx_id = self._get_context_id(event)
         user_id = event.get_sender_id()
         user_name = event.get_sender_name()
+        ctx_data = self.data.get(ctx_id, {})
 
         if ctx_id not in self.active_matches:
             yield event.plain_result("⚠️ 当前没有正在招募的对局，请先发送 /mj_start")
@@ -112,7 +103,15 @@ class MahjongPlugin(Star):
             yield event.plain_result("🚫 人数已满！")
             return
 
-        # 加入玩家
+        # --- 决赛模式检查 ---
+        if ctx_data.get("is_playoffs", False):
+            # 获取用户数据，检查是否有决赛资格
+            user_data = ctx_data.get(user_id)
+            if not user_data or not user_data.get("is_finalist"):
+                yield event.plain_result(f"🔒 决赛进行中！{user_name} 不是决赛选手，无法加入。")
+                return
+        # ------------------
+
         match["players"][user_id] = user_name
         current_count = len(match["players"])
 
@@ -122,7 +121,7 @@ class MahjongPlugin(Star):
             yield event.plain_result(
                 f"✅ 4人集结完毕，对局开始！\n{players_list}\n\n"
                 "🏁 对局结束后，请每位玩家发送：\n"
-                "/得点 [点数] (例如: /mj_end 35000)\n"
+                "/得点 [点数] (例如: /得点 35000)\n"
                 "当4人都提交后将自动结算。"
             )
         else:
@@ -196,7 +195,7 @@ class MahjongPlugin(Star):
                 return # 终止结算，保留 active_matches 状态
 
             # --- 校验通过，开始结算 ---
-            yield event.plain_result("✅ 点数核对无误 (100000)，正在结算...")
+            yield event.plain_result("✅ 点数校验无误 (100000)，正在结算...")
             
             for item in self._finalize_match(event, ctx_id, match):
                 yield item
@@ -261,7 +260,7 @@ class MahjongPlugin(Star):
                 break
         
         if not target_uid:
-            yield event.plain_result("⚠️ 格式错误，请 @ 需要处罚的用户。\n示例: /mj_chombo @某人")
+            yield event.plain_result("⚠️ 格式错误，请 @ 需要处罚的用户。\n示例: /chombo @某人")
             return
 
         # 2. 获取数据 (如果不存在则初始化，防止报错)
@@ -296,7 +295,7 @@ class MahjongPlugin(Star):
     async def show_rank(self, event: AstrMessageEvent, query_type: str):
         """
         查询排行榜
-        参数: pt / 位次 / 最高得点 / 避四率
+        参数: pt / 排位 / 位次 / 最高得点 / 避四率
         """
         ctx_id = self._get_context_id(event)
         ctx_data = self.data.get(ctx_id, {})
@@ -305,56 +304,180 @@ class MahjongPlugin(Star):
             yield event.plain_result("⚠️ 暂无对局记录。")
             return
 
-        # 转换为列表以便排序: [(uid, data), ...]
-        users = list(ctx_data.items())
-        
-        msg_header = ""
-        sorted_users = []
+        # 决赛模式提示
+        if ctx_data.get("is_playoffs"):
+             yield event.plain_result("🏆 当前处于季后赛，请使用 /finals_rank 或 /决赛榜 查询决赛战况。\n以下显示常规赛历史数据：")
 
-        if query_type.lower() in ["pt", "分数"]:
-            msg_header = "🏆 **生涯 PT 排行榜**"
+        users = list(ctx_data.items())
+        msg_lines = []
+
+        # --- 1. 原始PT榜 (Total PT) ---
+        if query_type.lower() in ["pt", "原始pt", "分数", "总分"]:
+            msg_header = "📊 **常规赛 PT榜** "
+            # 按 total_pt 排序
             sorted_users = sorted(users, key=lambda x: x[1]["total_pt"], reverse=True)
-            formatter = lambda d: f"{d['total_pt']} pt"
             
+            msg_lines = [msg_header]
+            for i, (uid, data) in enumerate(sorted_users):
+                msg_lines.append(f"{i+1}. {data['name']} — {data['total_pt']} pt [试合:{data['total_matches']}]")
+            
+        # --- 2. 排位PT榜 (Ranking PT, 含罚分) ---
+        elif query_type in ["排位", "排名", "排位pt", "ranking"]:
+            msg_header = "🏆 **赛季排位榜**"
+            
+            # 临时列表用于排序: (uid, data, ranking_pt, penalty)
+            ranked_list = []
+            for uid, data in users:
+                raw_pt = data["total_pt"]
+                matches = data["total_matches"]
+                penalty = max(0, 18 - matches) * 50
+                ranking_pt = raw_pt - penalty
+                ranked_list.append((uid, data, ranking_pt, penalty))
+            
+            # 按计算后的排位分排序
+            ranked_list.sort(key=lambda x: x[2], reverse=True)
+            
+            msg_lines = [msg_header]
+            for i, (uid, data, r_pt, penalty) in enumerate(ranked_list):
+                # 显示: 排名. 名字 — 排位分 (罚:xxx)
+                note = f"(罚:{penalty})" if penalty > 0 else ""
+                # 如果是决赛选手，可以加个标记（可选）
+                mark = "🔥" if data.get("is_finalist") else ""
+                
+                msg_lines.append(f"{i+1}. {data['name']} {mark} — {round(r_pt, 1)} pt {note} [{data['total_matches']}/18]")
+
+        # --- 3. 其他常规榜单 ---
         elif query_type in ["位次", "一位率"]:
             msg_header = "👑 **一位次数 排行榜**"
-            # 按一位次数排序，同一次数按总场数少者优先（胜率高）
             sorted_users = sorted(users, key=lambda x: (x[1]["ranks"][0], -x[1]["total_matches"]), reverse=True)
-            formatter = lambda d: f"一位 {d['ranks'][0]} 次 / {d['total_matches']} 场"
+            msg_lines = [msg_header]
+            for i, (uid, data) in enumerate(sorted_users):
+                msg_lines.append(f"{i+1}. {data['name']} — 一位 {data['ranks'][0]} 次 / {data['total_matches']} 场")
             
         elif query_type in ["最高得点", "最大得点"]:
             msg_header = "💥 **单场最高得点 排行榜**"
             sorted_users = sorted(users, key=lambda x: x[1]["max_score"], reverse=True)
-            formatter = lambda d: f"{d['max_score']} 点"
+            msg_lines = [msg_header]
+            for i, (uid, data) in enumerate(sorted_users):
+                msg_lines.append(f"{i+1}. {data['name']} — {data['max_score']} 点")
             
         elif query_type in ["避四率", "避四"]:
             msg_header = "🛡️ **避四率 排行榜** (至少5场)"
-            # 过滤场数过少的人
             valid_users = [u for u in users if u[1]["total_matches"] >= 5]
             sorted_users = sorted(valid_users, key=lambda x: x[1]["avoid_4_rate"], reverse=True)
-            formatter = lambda d: f"{d['avoid_4_rate']}% (共{d['total_matches']}场)"
+            msg_lines = [msg_header]
+            for i, (uid, data) in enumerate(sorted_users):
+                msg_lines.append(f"{i+1}. {data['name']} — {data['avoid_4_rate']}% (共{data['total_matches']}场)")
             
         else:
-            yield event.plain_result("❓ 未知查询类型。请使用: pt, 位次, 最高得点, 避四率")
+            yield event.plain_result("❓ 未知查询类型。\n请使用: pt (原始分), 排位 (含罚分), 位次, 最高得点, 避四率")
             return
 
-        msg_lines = [msg_header]
-        
-        # 修复: 移除 [:15] 限制，显示所有玩家
-        for i, (uid, data) in enumerate(sorted_users): 
-            stats_str = formatter(data)
-            msg_lines.append(f"{i+1}. {data['name']} — {stats_str} [试合:{data['total_matches']}]")
-
         yield event.plain_result("\n".join(msg_lines))
+
+    @command("mj_finals_setup", alias=["进入决赛", "季后赛初始化"])
+    async def setup_finals(self, event: AstrMessageEvent):
+        """
+        [管理员] 初始化决赛模式
+        用法: /mj_finals_setup @选手1 @选手2 @选手3 @选手4
+        逻辑: (原始PT - 缺席罚分) / 2 = 决赛初始分
+        """
+        ctx_id = self._get_context_id(event)
+        ctx_data = self.data.setdefault(ctx_id, {})
+
+        if ctx_data.get("is_playoffs"):
+            yield event.plain_result("⚠️ 错误：当前已经是决赛模式！请勿重复执行。")
+            return
+
+        # 解析 4 位决赛选手
+        target_uids = []
+        for comp in event.get_messages():
+            if isinstance(comp, At):
+                target_uids.append(str(comp.qq))
+        target_uids = list(set(target_uids))
+
+        if len(target_uids) != 4:
+            yield event.plain_result(f"⚠️ 必须指定 4 位选手！当前检测到 {len(target_uids)} 人。")
+            return
+
+        msg_lines = ["🏆 **已进入季后赛**", "----------------"]
+        
+        for uid in target_uids:
+            if uid not in ctx_data:
+                ctx_data[uid] = {"name": f"选手{uid}", "total_pt": 0.0, "total_matches": 0, "ranks": [0,0,0,0], "max_score": 0, "avoid_4_rate": 0.0}
+            
+            user = ctx_data[uid]
+            
+            # 1. 计算常规赛最终排位分 (含罚分逻辑)
+            raw_pt = user["total_pt"]
+            matches = user["total_matches"]
+            penalty = max(0, 18 - matches) * 50
+            ranking_pt = raw_pt - penalty
+            
+            # 2. 备份数据 (评奖用)
+            user["regular_raw_pt"] = raw_pt          # 原始分
+            user["regular_ranking_pt"] = ranking_pt  # 罚分后的排位分
+            
+            # 3. 决赛初始分 = 排位分 / 2
+            start_pt = round(ranking_pt / 2, 1)
+            user["total_pt"] = start_pt
+            
+            # 4. 标记决赛身份
+            user["is_finalist"] = True
+            
+            msg_lines.append(f"👤 {user['name']}")
+            msg_lines.append(f"   常规赛: {raw_pt} (罚:{penalty}) = {ranking_pt}")
+            msg_lines.append(f"   决赛起始: {start_pt} pt")
+
+        ctx_data["is_playoffs"] = True
+        self._save_data()
+
+        msg_lines.append("----------------")
+        msg_lines.append("✅ 决赛圈已锁定，非决赛选手将无法加入对局。")
+        msg_lines.append("📊 请使用 /决赛榜 或 /finals_rank 查询决赛榜单。")
+        
+        yield event.plain_result("\n".join(msg_lines))
+
+    @command("mj_finals_rank", alias=["决赛榜", "finals_rank"])
+    async def show_finals_rank(self, event: AstrMessageEvent):
+        """显示决赛实时排行榜"""
+        ctx_id = self._get_context_id(event)
+        ctx_data = self.data.get(ctx_id, {})
+        
+        if not ctx_data.get("is_playoffs"):
+            yield event.plain_result("⚠️ 当前未进行季后赛，请使用 /rank。")
+            return
+
+        finalists = []
+        for uid, data in ctx_data.items():
+            if isinstance(data, dict) and data.get("is_finalist"):
+                finalists.append(data)
+        
+        finalists.sort(key=lambda x: x["total_pt"], reverse=True)
+
+        msg = ["🏆 **决赛 实时排位**", "(起始分 = 常规赛排位分 / 2)"]
+        for i, user in enumerate(finalists):
+            # 显示格式：排名. 名字 — 当前总分 (决赛起始分: xxx)
+            start_pt = user.get("regular_ranking_pt", 0) / 2 # 重新算一下仅仅为了展示，或者取 total_pt
+            # 其实直接显示当前分即可，因为 total_pt 已经是折半后+决赛变动的总和了
+            msg.append(f"{i+1}. {user['name']} — {user['total_pt']} pt")
+            
+        yield event.plain_result("\n".join(msg))
 
     @command("mj_reset", alias=["新赛季"])
     async def reset_season(self, event: AstrMessageEvent):
         """重置当前群组的所有数据（开启新赛季）"""
         ctx_id = self._get_context_id(event)
         
+        # 1. 检查是否有正在进行的对局，强制清理
+        if ctx_id in self.active_matches:
+            del self.active_matches[ctx_id]
+            logger.info(f"Context {ctx_id} active match cleared due to season reset.")
+
+        # 2. 清除数据库中的所有记录（包括决赛标记 is_playoffs）
         if ctx_id in self.data:
-            self.data[ctx_id] = {}
+            self.data[ctx_id] = {} # 这一步会彻底抹除决赛状态
             self._save_data()
-            yield event.plain_result("🔄 数据已重置，新赛季开始！")
+            yield event.plain_result("🔄 赛季数据已完全重置！\n所有积分已清零，敬请期待新赛季！")
         else:
             yield event.plain_result("⚠️ 当前没有数据可重置。")
