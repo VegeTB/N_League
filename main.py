@@ -445,7 +445,7 @@ class MahjongPlugin(Star):
         ranks = user["ranks"] # [1位数, 2位数, 3位数, 4位数]
         
         # 顺位率
-        rates = [f"{round(r / total_games * 100, 1)}%" for r in ranks]
+        rates = [f"{r / total_games * 100:.2f}%" for r in ranks]
         
         # 平均顺位: (1*数 + 2*数 + 3*数 + 4*数) / 总场数
         rank_sum = sum((i + 1) * count for i, count in enumerate(ranks))
