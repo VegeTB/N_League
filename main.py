@@ -13,7 +13,7 @@ DATA_DIR = os.path.join("data", "plugins", "astrbot_mahjong_plugin")
 os.makedirs(DATA_DIR, exist_ok=True)
 DATA_FILE = os.path.join(DATA_DIR, "mahjong_data.json")
 
-@register("N_league", "Vege", "日麻对局记录插件", "1.1.0")
+@register("N_league", "Vege", "日麻对局记录插件", "1.2.0")
 class MahjongPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
@@ -222,13 +222,18 @@ class MahjongPlugin(Star):
                 "total_matches": 0,
                 "ranks": [0, 0, 0, 0],
                 "max_score": 0,
+                "total_score": 0,
                 "avoid_4_rate": 0.0
             })
+
+            if "total_score" not in user_stat:
+                user_stat["total_score"] = 0
             
             user_stat["name"] = username
             user_stat["total_pt"] = round(user_stat["total_pt"] + pt_change, 1)
             user_stat["total_matches"] += 1
             user_stat["ranks"][rank-1] += 1
+            user_stat["total_score"] += score
             
             if score > user_stat["max_score"]:
                 user_stat["max_score"] = score
@@ -375,6 +380,111 @@ class MahjongPlugin(Star):
 
         yield event.plain_result("\n".join(msg_lines))
 
+    @command("mj_stats", alias=["个人数据", "查数据", "战绩", "吃鱼"])
+    async def my_stats(self, event: AstrMessageEvent):
+        """
+        查询个人或他人生涯数据
+        用法: /吃鱼 (查询自己)
+              /吃鱼 @被查询用户 (查询他人)
+        """
+        ctx_id = self._get_context_id(event)
+        ctx_data = self.data.get(ctx_id, {})
+        
+        if not ctx_data:
+            yield event.plain_result("⚠️ 暂无对局记录。")
+            return
+
+        # 1. 确定要查询的用户ID
+        target_uid = event.get_sender_id() # 默认查自己
+        target_name = event.get_sender_name()
+        
+        # 检查是否有 @
+        for comp in event.get_messages():
+            if isinstance(comp, At):
+                target_uid = str(comp.qq)
+                # 尝试从数据中获取名字，获取不到就用默认占位
+                if target_uid in ctx_data:
+                    target_name = ctx_data[target_uid]["name"]
+                else:
+                    target_name = f"用户{target_uid}"
+                break
+
+        if target_uid not in ctx_data:
+            yield event.plain_result(f"⚠️ 未找到 {target_name} 的参赛记录。")
+            return
+
+        user = ctx_data[target_uid]
+        total_games = user["total_matches"]
+        
+        if total_games == 0:
+            yield event.plain_result(f"⚠️ {user['name']} 还没有完成过对局。")
+            return
+
+        # 2. 计算排名 (需要遍历所有用户)
+        users_list = []
+        for uid, data in ctx_data.items():
+            # 计算排位分: 原始分 - 罚分
+            raw_pt = data["total_pt"]
+            penalty = max(0, 18 - data["total_matches"]) * 50
+            ranking_pt = raw_pt - penalty
+            users_list.append({
+                "uid": uid,
+                "raw_pt": raw_pt,
+                "ranking_pt": ranking_pt
+            })
+        
+        # 2.1 原始PT排名
+        users_list.sort(key=lambda x: x["raw_pt"], reverse=True)
+        raw_rank = next((i + 1 for i, u in enumerate(users_list) if u["uid"] == target_uid), "N/A")
+        
+        # 2.2 排位PT排名
+        users_list.sort(key=lambda x: x["ranking_pt"], reverse=True)
+        ranking_rank = next((i + 1 for i, u in enumerate(users_list) if u["uid"] == target_uid), "N/A")
+        
+        # 3. 计算各项统计数据
+        ranks = user["ranks"] # [1位数, 2位数, 3位数, 4位数]
+        
+        # 顺位率
+        rates = [f"{round(r / total_games * 100, 1)}%" for r in ranks]
+        
+        # 平均顺位: (1*数 + 2*数 + 3*数 + 4*数) / 总场数
+        avg_rank_val = sum((i + 1) * count for i, count in enumerate(ranks)) / total_games
+        avg_rank = round(avg_rank_val, 2)
+        
+        # 平均点数
+        total_score = user.get("total_score", 0) # 兼容旧数据
+        avg_score = int(total_score / total_games)
+        
+        # 排位分计算细节
+        current_penalty = max(0, 18 - total_games) * 50
+        current_ranking_pt = user["total_pt"] - current_penalty
+
+        # 4. 构建面板
+        msg = [
+            f"📊 {user['name']} 的赛季数据",
+            f"------------------------",
+            f"🔢 ===PT排名===",
+            f"• 原始PT: {user['total_pt']} pt (第 {raw_rank} 名)",
+            f"• 排位PT: {round(current_ranking_pt, 1)} pt (第 {ranking_rank} 名)",
+            f"  *(罚分: -{current_penalty} pt)*",
+            f"",
+            f"📈 ===对局详情=== (共 {total_games} 场)",
+            f"🥇 一位率: {rates[0]} ({ranks[0]}回)",
+            f"🥈 二位率: {rates[1]} ({ranks[1]}回)",
+            f"🥉 三位率: {rates[2]} ({ranks[2]}回)",
+            f"💀 四位率: {rates[3]} ({ranks[3]}回)",
+            f"",
+            f"📐 ===均值统计===",
+            f"• 平均顺位: {avg_rank}",
+            f"• 平均得点: {avg_score}",
+            f"• 最高得点: {user['max_score']}",
+            f"• 避四率: {user['avoid_4_rate']}%",
+            f"",
+            f"注意：Season 1的平均得点数据不全，可能不具有实际参考价值。"
+        ]
+        
+        yield event.plain_result("\n".join(msg))
+    
     @command("mj_finals_setup", alias=["进入决赛", "季后赛初始化"])
     async def setup_finals(self, event: AstrMessageEvent):
         """
