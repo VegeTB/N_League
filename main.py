@@ -448,8 +448,8 @@ class MahjongPlugin(Star):
         rates = [f"{round(r / total_games * 100, 1)}%" for r in ranks]
         
         # 平均顺位: (1*数 + 2*数 + 3*数 + 4*数) / 总场数
-        avg_rank_val = sum((i + 1) * count for i, count in enumerate(ranks)) / total_games
-        avg_rank = round(avg_rank_val, 2)
+        rank_sum = sum((i + 1) * count for i, count in enumerate(ranks))
+        avg_rank_val = rank_sum / total_games
         
         # 平均点数
         total_score = user.get("total_score", 0) # 兼容旧数据
@@ -475,7 +475,7 @@ class MahjongPlugin(Star):
             f"💀 四位率: {rates[3]} ({ranks[3]}回)",
             f"",
             f"📐 ===均值统计===",
-            f"• 平均顺位: {avg_rank}",
+            f"• 平均顺位: {avg_rank_val:.2f}",
             f"• 平均得点: {avg_score}",
             f"• 最高得点: {user['max_score']}",
             f"• 避四率: {user['avoid_4_rate']}%",
