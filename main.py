@@ -13,7 +13,7 @@ DATA_DIR = os.path.join("data", "plugins", "astrbot_mahjong_plugin")
 os.makedirs(DATA_DIR, exist_ok=True)
 DATA_FILE = os.path.join(DATA_DIR, "mahjong_data.json")
 
-@register("N_league", "Vege", "日麻对局记录插件", "1.2.0")
+@register("N_league", "Vege", "日麻对局记录插件", "2.0.0")
 class MahjongPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
@@ -46,6 +46,15 @@ class MahjongPlugin(Star):
         if hasattr(event, 'user_id') and event.user_id:
             return f"private_{event.user_id}"
         return "default_ctx"
+        
+    def _get_user_match(self, ctx_id: str, user_id: str):
+        """查找指定用户当前所在的对局ID及对局数据"""
+        if ctx_id not in self.active_matches:
+            return None, None
+        for mid, match in self.active_matches[ctx_id].items():
+            if user_id in match["players"]:
+                return mid, match
+        return None, None
 
     def _calculate_pt_custom(self, score: int, rank: int) -> float:
         """
@@ -62,121 +71,162 @@ class MahjongPlugin(Star):
 
     @command("mj_start", alias=["对局开始", "开房"])
     async def start_match(self, event: AstrMessageEvent):
-        """开始一场新的对局，等待4人加入"""
+        """开始一场新的对局，自动分配桌号"""
         ctx_id = self._get_context_id(event)
+        user_id = event.get_sender_id()
+        user_name = event.get_sender_name()
         
-        self.active_matches[ctx_id] = {
-            "players": {}, # {uid: username}
-            "scores": {},  # {uid: score}
+        # 检查是否已经在其他对局中
+        mid, existing_match = self._get_user_match(ctx_id, user_id)
+        if existing_match:
+            yield event.plain_result(f"⚠️ 你已经在对局 #{mid} 中了，无法分身！")
+            return
+
+        if ctx_id not in self.active_matches:
+            self.active_matches[ctx_id] = {}
+            
+        # 寻找空闲桌号 (1, 2, 3...)
+        match_id = 1
+        while str(match_id) in self.active_matches[ctx_id]:
+            match_id += 1
+        match_id = str(match_id)
+
+        # 创建并自动加入
+        self.active_matches[ctx_id][match_id] = {
+            "players": {user_id: user_name},
+            "scores": {},
             "status": "recruiting"
         }
         
         yield event.plain_result(
-            "🀄️ 对局已建立！\n"
-            "请4位参赛者发送 /加入对局 加入比赛。\n"
-            "人满后自动开始记录。"
+            f"对局 #{match_id} 已建立！\n"
+            f"选手 {user_name} 已加入！ (1/4)\n"
+            f"请其他选手发送 /加入对局 加入。\n"
+            f"(多桌同开时请务必加上对局ID）\n"
         )
 
     @command("mj_join", alias=["加入对局", "join"])
-    async def join_match(self, event: AstrMessageEvent):
-        """加入当前对局"""
+    async def join_match(self, event: AstrMessageEvent, match_id: str = ""):
+        """加入当前招募中的对局"""
         ctx_id = self._get_context_id(event)
         user_id = event.get_sender_id()
         user_name = event.get_sender_name()
         ctx_data = self.data.get(ctx_id, {})
+        match_id = str(match_id).strip()
 
-        if ctx_id not in self.active_matches:
-            yield event.plain_result("⚠️ 当前没有正在招募的对局，请先发送 /mj_start")
+        # 检查是否已经在对局中
+        mid, existing_match = self._get_user_match(ctx_id, user_id)
+        if existing_match:
+            yield event.plain_result(f"👉 {user_name} 已经在对局 #{mid} 中了。")
             return
 
-        match = self.active_matches[ctx_id]
-        
-        if match["status"] != "recruiting":
-            yield event.plain_result("⚠️ 对局已经开始或正在结算，无法加入。")
+        if ctx_id not in self.active_matches or not self.active_matches[ctx_id]:
+            yield event.plain_result("⚠️ 当前没有正在招募的对局，请先发送 /对局开始")
             return
 
-        if user_id in match["players"]:
-            yield event.plain_result(f"👉 {user_name} 已经在对局中了。")
-            return
-
-        if len(match["players"]) >= 4:
-            yield event.plain_result("🚫 人数已满！")
-            return
-
-        # --- 决赛模式检查 ---
+        # 决赛圈锁
         if ctx_data.get("is_playoffs", False):
-            # 获取用户数据，检查是否有决赛资格
             user_data = ctx_data.get(user_id)
             if not user_data or not user_data.get("is_finalist"):
                 yield event.plain_result(f"🔒 决赛进行中！{user_name} 不是决赛选手，无法加入。")
                 return
-        # ------------------
 
-        match["players"][user_id] = user_name
-        current_count = len(match["players"])
+        target_match = None
+        target_mid = None
+
+        # 路由逻辑：寻找要加入的桌
+        if match_id:
+            if match_id in self.active_matches[ctx_id]:
+                target_match = self.active_matches[ctx_id][match_id]
+                target_mid = match_id
+            else:
+                yield event.plain_result(f"⚠️ 找不到对局 #{match_id}。")
+                return
+        else:
+            recruiting_matches = {k: v for k, v in self.active_matches[ctx_id].items() if v["status"] == "recruiting"}
+            if not recruiting_matches:
+                yield event.plain_result("QAQ 当前所有的对局都已经人满开始了……")
+                return
+            elif len(recruiting_matches) == 1:
+                target_mid, target_match = list(recruiting_matches.items())[0]
+            else:
+                match_list = ", ".join([f"#{k}" for k in recruiting_matches.keys()])
+                yield event.plain_result(f"⚠️ 有多个正在招募的对局 ({match_list})，请指定桌号哦")
+                return
+
+        if target_match["status"] != "recruiting":
+            yield event.plain_result(f"⚠️ 对局 #{target_mid} 正在进行，无法加入。")
+            return
+
+        if len(target_match["players"]) >= 4:
+            yield event.plain_result(f"🚫 对局 #{target_mid} 人数已满！")
+            return
+
+        # 执行加入
+        target_match["players"][user_id] = user_name
+        current_count = len(target_match["players"])
 
         if current_count == 4:
-            match["status"] = "playing"
-            players_list = "\n".join([f"- {name}" for name in match["players"].values()])
+            target_match["status"] = "playing"
+            players_list = "\n".join([f"- {name}" for name in target_match["players"].values()])
             yield event.plain_result(
-                f"✅ 4人集结完毕，对局开始！\n{players_list}\n\n"
-                "🏁 对局结束后，请每位玩家发送：\n"
-                "/得点 [点数] (例如: /得点 35000)\n"
-                "当4人都提交后将自动结算。"
+                f"✅ 对局 #{target_mid} 集结完毕，GAME START！\n{players_list}\n\n"
+                f"🏁 结束后请本桌选手发送：/得点 [点数]"
             )
         else:
-            yield event.plain_result(f"👋 {user_name} 加入成功 ({current_count}/4)")
+            yield event.plain_result(f"选手 {user_name} 加入对局 #{target_mid} ！ ({current_count}/4)")
 
     @command("mj_cancel", alias=["取消对局", "撤销对局", "关闭对局"])
     async def cancel_match(self, event: AstrMessageEvent):
-        """取消当前正在招募或进行的对局"""
+        """自动识别并解散用户当前所在的对局"""
         ctx_id = self._get_context_id(event)
+        user_id = event.get_sender_id()
 
-        if ctx_id in self.active_matches:
-            status = self.active_matches[ctx_id]["status"]
-            del self.active_matches[ctx_id]
+        mid, match = self._get_user_match(ctx_id, user_id)
+        
+        if match:
+            status = match["status"]
+            del self.active_matches[ctx_id][mid]
             
+            # 维护外层字典整洁
+            if not self.active_matches[ctx_id]:
+                del self.active_matches[ctx_id]
+                
             if status == "recruiting":
-                yield event.plain_result("🚫 已关闭当前的对局招募。")
+                yield event.plain_result(f"🚫 已关闭对局招募 (桌号 #{mid})。")
             else:
-                yield event.plain_result("🚫 已强制中止当前对局，本局数据不予记录。")
+                yield event.plain_result(f"🚫 已中止对局 #{mid}，本局数据不记录。")
         else:
-            yield event.plain_result("⚠️ 当前没有正在进行的对局。")
+            yield event.plain_result("⚠️ 你当前不在任何进行中的对局哦")
 
     @command("mj_end", alias=["对局结束", "得点"])
     async def end_match(self, event: AstrMessageEvent, score: int):
-        """提交点数并尝试结算"""
+        """自动识别用户所在的对局并录入分数"""
         ctx_id = self._get_context_id(event)
         user_id = event.get_sender_id()
         
-        if ctx_id not in self.active_matches:
-            yield event.plain_result("⚠️ 当前没有进行中的对局。")
-            return
-            
-        match = self.active_matches[ctx_id]
+        mid, match = self._get_user_match(ctx_id, user_id)
         
+        if not match:
+            yield event.plain_result("⚠️ 你当前不在任何对局中")
+            return
+
         if match["status"] != "playing":
-            yield event.plain_result("⚠️ 对局尚未开始，请等待4人加入。")
+            yield event.plain_result(f"⚠️ 对局 #{mid} 尚未开始")
             return
 
-        if user_id not in match["players"]:
-            yield event.plain_result("⚠️ 你不是本局参赛者，无法提交成绩。")
-            return
-
-        # 记录分数 (允许覆盖)
+        # 记录分数 (允许覆盖修改)
         match["scores"][user_id] = score
         submitted_count = len(match["scores"])
         
         # 检查是否满4人数据
         if submitted_count == 4:
-            # --- 新增：10万点检查逻辑 ---
             total_score = sum(match["scores"].values())
             
             if total_score != 100000:
                 diff = total_score - 100000
                 diff_str = f"+{diff}" if diff > 0 else f"{diff}"
                 
-                # 构建当前提交详情，方便查错
                 details = []
                 for uid, s in match["scores"].items():
                     name = match["players"][uid]
@@ -184,30 +234,28 @@ class MahjongPlugin(Star):
                 details_str = "\n".join(details)
                 
                 yield event.plain_result(
-                    f"⚠️ **点数核算失败**\n"
+                    f"⚠️ 对局 #{mid} 点数核算不通过\n"
                     f"四家得点之和为 {total_score} (误差 {diff_str})\n"
                     f"目标: 100000\n"
                     f"----------------\n"
                     f"当前提交:\n{details_str}\n"
-                    f"----------------\n"
-                    f"👉 请发现输入错误的玩家重新发送 /mj_end [正确点数] 进行修正。"
+                    f"👉 请本桌发现错误的选手重新发送 /得点 [正确点数] 修正。"
                 )
-                return # 终止结算，保留 active_matches 状态
+                return 
 
-            # --- 校验通过，开始结算 ---
-            yield event.plain_result("✅ 点数校验无误 (100000)，正在结算...")
+            yield event.plain_result(f"✅ 对局 #{mid} 点数核算通过 (100000)，正在结算...")
             
-            for item in self._finalize_match(event, ctx_id, match):
+            for item in self._finalize_match(event, ctx_id, mid, match):
                 yield item
         else:
             yield event.plain_result(f"💾 分数已记录 ({submitted_count}/4)")
 
-    def _finalize_match(self, event, ctx_id, match):
+    def _finalize_match(self, event, ctx_id, match, mid):
         """结算对局核心逻辑"""
         sorted_scores = sorted(match["scores"].items(), key=lambda x: x[1], reverse=True)
         
         ctx_data = self.data.setdefault(ctx_id, {})
-        result_msg = ["🀄️ **本局结算**"]
+        result_msg = ["🀄️ 对局结束"]
         
         for rank_idx, (uid, score) in enumerate(sorted_scores):
             rank = rank_idx + 1
@@ -245,19 +293,22 @@ class MahjongPlugin(Star):
             result_msg.append(f"{icon} {username}: {score} ({pt_str}pt)")
 
         self._save_data()
-        del self.active_matches[ctx_id]
+
+        del self.active_matches[ctx_id][mid]
+        if not self.active_matches[ctx_id]:
+            del self.active_matches[ctx_id]
         
         yield event.plain_result("\n".join(result_msg))
+
 
     @command("mj_chombo", alias=["冲和", "错和", "罚分", "chombo"])
     async def chombo(self, event: AstrMessageEvent):
         """
         错和处罚：扣除指定用户 20pt
-        用法: /mj_chombo @用户
+        用法: /mj_chombo @用户 [备注]
         """
         ctx_id = self._get_context_id(event)
         
-        # 1. 解析被 @ 的用户
         target_uid = None
         for comp in event.get_messages():
             if isinstance(comp, At):
@@ -265,33 +316,49 @@ class MahjongPlugin(Star):
                 break
         
         if not target_uid:
-            yield event.plain_result("⚠️ 格式错误，请 @ 需要处罚的用户。\n示例: /chombo @某人")
+            yield event.plain_result("⚠️ 格式错误，请 @ 需要处罚的用户。\n示例: /chombo @某人 诈和")
             return
 
-        # 2. 获取数据 (如果不存在则初始化，防止报错)
+        reason_parts =[]
+        for comp in event.get_messages():
+            # 过滤掉 At 组件（艾特），仅获取其他的普通文本
+            if not isinstance(comp, At) and hasattr(comp, 'text'):
+                reason_parts.append(comp.text)
+                
+        raw_text = " ".join(reason_parts).strip()
+        
+        # 剔除指令本身的文字（防止把 "/mj_chombo" 也当成原因）
+        for cmd in["/mj_chombo", "/冲和", "/错和", "/罚分", "mj_chombo", "冲和", "错和", "罚分"]:
+            if raw_text.startswith(cmd):
+                raw_text = raw_text[len(cmd):].strip()
+                break
+                
+        # 如果提取完没剩下字，就给个默认备注
+        reason = raw_text if raw_text else "无备注"
+        # ------------------------
+
         ctx_data = self.data.setdefault(ctx_id, {})
         
         if target_uid not in ctx_data:
-            # 初始化新用户
             ctx_data[target_uid] = {
-                "name": f"用户{target_uid}", # 没玩过对局的人没有记录名字，用ID暂代
+                "name": f"用户{target_uid}",
                 "total_pt": 0.0,
                 "total_matches": 0,
-                "ranks": [0, 0, 0, 0],
+                "ranks":[0, 0, 0, 0],
                 "max_score": 0,
+                "total_score": 0,
                 "avoid_4_rate": 0.0
             }
         
         user_data = ctx_data[target_uid]
-        
-        # 3. 执行处罚 (-20pt)
         user_data["total_pt"] = round(user_data["total_pt"] - 20.0, 1)
-        
         self._save_data()
         
+        # --- 修改：在返回消息中展示备注 ---
         yield event.plain_result(
             f"🚫 **Chombo 处罚执行**\n"
             f"对象: {user_data['name']}\n"
+            f"原因: {reason}\n"
             f"惩罚: -20 pt\n"
             f"当前 PT: {user_data['total_pt']}"
         )
@@ -576,18 +643,15 @@ class MahjongPlugin(Star):
 
     @command("mj_reset", alias=["新赛季"])
     async def reset_season(self, event: AstrMessageEvent):
-        """重置当前群组的所有数据（开启新赛季）"""
+        """重置当前群组的所有数据并清除所有正在进行的对局"""
         ctx_id = self._get_context_id(event)
         
-        # 1. 检查是否有正在进行的对局，强制清理
         if ctx_id in self.active_matches:
             del self.active_matches[ctx_id]
-            logger.info(f"Context {ctx_id} active match cleared due to season reset.")
 
-        # 2. 清除数据库中的所有记录（包括决赛标记 is_playoffs）
         if ctx_id in self.data:
-            self.data[ctx_id] = {} # 这一步会彻底抹除决赛状态
+            self.data[ctx_id] = {} 
             self._save_data()
-            yield event.plain_result("🔄 赛季数据已完全重置！\n所有积分已清零，敬请期待新赛季！")
+            yield event.plain_result("🔄 赛季数据已完全重置！\n所有积分已清零，新的赛季请加油！")
         else:
             yield event.plain_result("⚠️ 当前没有数据可重置。")
