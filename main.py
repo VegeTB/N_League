@@ -251,47 +251,50 @@ class MahjongPlugin(Star):
             yield event.plain_result(f"💾 分数已记录 ({submitted_count}/4)")
 
     def _finalize_match(self, event, ctx_id, match, mid):
-        """结算对局核心逻辑"""
+        """结算对局核心逻辑（含同分平分马点机制 + 总得点记录）"""
         sorted_scores = sorted(match["scores"].items(), key=lambda x: x[1], reverse=True)
-        
         ctx_data = self.data.setdefault(ctx_id, {})
-        result_msg = ["🀄️ 对局结束"]
+        result_msg =[f"🀄️ 对局结束"]
         
-        for rank_idx, (uid, score) in enumerate(sorted_scores):
-            rank = rank_idx + 1
-            username = match["players"][uid]
-            
-            pt_change = self._calculate_pt_custom(score, rank)
-            pt_str = f"+{pt_change}" if pt_change > 0 else f"{pt_change}"
-            
-            user_stat = ctx_data.setdefault(uid, {
-                "name": username,
-                "total_pt": 0.0,
-                "total_matches": 0,
-                "ranks": [0, 0, 0, 0],
-                "max_score": 0,
-                "total_score": 0,
-                "avoid_4_rate": 0.0
-            })
+        UMA_SLOTS =[50.0, 10.0, -10.0, -30.0]
+        ICONS =["🥇", "🥈", "🥉", "💀"]
 
-            if "total_score" not in user_stat:
-                user_stat["total_score"] = 0
+        i = 0
+        while i < len(sorted_scores):
+            j = i + 1
+            while j < len(sorted_scores) and sorted_scores[j][1] == sorted_scores[i][1]:
+                j += 1
             
-            user_stat["name"] = username
-            user_stat["total_pt"] = round(user_stat["total_pt"] + pt_change, 1)
-            user_stat["total_matches"] += 1
-            user_stat["ranks"][rank-1] += 1
-            user_stat["total_score"] += score
+            current_umas = UMA_SLOTS[i:j]
+            avg_uma = sum(current_umas) / len(current_umas)
             
-            if score > user_stat["max_score"]:
-                user_stat["max_score"] = score
+            for k in range(i, j):
+                uid, score = sorted_scores[k]
+                username = match["players"][uid]
+                
+                base_pt = (score - 30000) / 1000.0
+                final_pt = round(base_pt + avg_uma, 1)
+                pt_str = f"+{final_pt}" if final_pt > 0 else f"{final_pt}"
+                
+                user_stat = ctx_data.setdefault(uid, {
+                    "name": username, "total_pt": 0.0, "total_matches": 0,
+                    "ranks": [0, 0, 0, 0], "max_score": 0, "total_score": 0, "avoid_4_rate": 0.0
+                })
+                
+                if "total_score" not in user_stat: user_stat["total_score"] = 0
+                user_stat["name"] = username
+                user_stat["total_pt"] = round(user_stat["total_pt"] + final_pt, 1)
+                user_stat["total_matches"] += 1
+                user_stat["ranks"][i] += 1
+                user_stat["total_score"] += score
+                
+                if score > user_stat["max_score"]: user_stat["max_score"] = score
+                not_4th_count = sum(user_stat["ranks"][:3])
+                user_stat["avoid_4_rate"] = round((not_4th_count / user_stat["total_matches"]) * 100, 2)
+                
+                result_msg.append(f"{ICONS[i]} {username}: {score} ({pt_str}pt)")
+            i = j
             
-            not_4th_count = sum(user_stat["ranks"][:3])
-            user_stat["avoid_4_rate"] = round((not_4th_count / user_stat["total_matches"]) * 100, 2)
-            
-            icon = ["🥇", "🥈", "🥉", "💀"][rank-1]
-            result_msg.append(f"{icon} {username}: {score} ({pt_str}pt)")
-
         self._save_data()
 
         del self.active_matches[ctx_id][mid]
