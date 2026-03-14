@@ -245,7 +245,7 @@ class MahjongPlugin(Star):
 
             yield event.plain_result(f"✅ 对局 #{mid} 点数核算通过 (100000)，正在结算...")
             
-            for item in self._finalize_match(event, ctx_id, mid, match):
+            for item in self._finalize_match(event, ctx_id, match, mid):
                 yield item
         else:
             yield event.plain_result(f"💾 分数已记录 ({submitted_count}/4)")
