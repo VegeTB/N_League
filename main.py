@@ -526,7 +526,7 @@ class MahjongPlugin(Star):
         avg_score = int(total_score / total_games)
         
         # 排位分计算细节
-        current_penalty = max(0, 18 - total_games) * 50
+        current_penalty = max(0, 20 - total_games) * 50
         current_ranking_pt = user["total_pt"] - current_penalty
 
         # 4. 构建面板
