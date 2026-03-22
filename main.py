@@ -419,7 +419,7 @@ class MahjongPlugin(Star):
                 # 如果是决赛选手，可以加个标记（可选）
                 mark = "🔥" if data.get("is_finalist") else ""
                 
-                msg_lines.append(f"{i+1}. {data['name']} {mark} — {round(r_pt, 1)} pt {note} [{data['total_matches']}/18]")
+                msg_lines.append(f"{i+1}. {data['name']} {mark} — {round(r_pt, 1)} pt {note} [{data['total_matches']}/20]")
 
         # --- 3. 其他常规榜单 ---
         elif query_type in ["位次", "一位率"]:
@@ -495,7 +495,7 @@ class MahjongPlugin(Star):
         for uid, data in ctx_data.items():
             # 计算排位分: 原始分 - 罚分
             raw_pt = data["total_pt"]
-            penalty = max(0, 18 - data["total_matches"]) * 50
+            penalty = max(0, 20 - data["total_matches"]) * 50
             ranking_pt = raw_pt - penalty
             users_list.append({
                 "uid": uid,
