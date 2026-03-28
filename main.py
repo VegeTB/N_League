@@ -4,6 +4,7 @@ import json
 from astrbot.api.message_components import At
 import os
 import logging
+import random
 from typing import Dict, List, Any
 
 logger = logging.getLogger("MahjongPlugin")
@@ -168,9 +169,18 @@ class MahjongPlugin(Star):
 
         if current_count == 4:
             target_match["status"] = "playing"
-            players_list = "\n".join([f"- {name}" for name in target_match["players"].values()])
+            
+            # --- 新增：随机分配东南西北风位 ---
+            winds =["东", "南", "西", "北"]
+            player_list = list(target_match["players"].values())
+            random.shuffle(player_list)  # 随机打乱玩家顺序
+            
+            # 拼接带有风位的玩家列表
+            players_list_str = "\n".join([f"{winds[i]}: {name}" for i, name in enumerate(player_list)])
+            # --------------------------------
+            
             yield event.plain_result(
-                f"✅ 对局 #{target_mid} 集结完毕，GAME START！\n{players_list}\n\n"
+                f"✅ 对局 #{target_mid} 集结完毕，GAME START！\n{players_list_str}\n\n"
                 f"🏁 结束后请本桌选手发送：/得点 [点数]"
             )
         else:
