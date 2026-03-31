@@ -862,7 +862,7 @@ class MahjongPlugin(Star):
         user_data["ng_count"] += 1
         self._save_event_data()
         
-        yield event.plain_result(f"🚨 NG 记录！\n选手 {user_data['name']} NG次数+1 \n当前累计NG次数：{user_data['ng_count']} 次" \n ohno)
+        yield event.plain_result(f"🚨 NG 记录！\n选手 {user_data['name']} NG次数+1 \n当前累计NG次数：{user_data['ng_count']} 次" \n "ohno")
 
     @command("mj_event_end", alias=["活动得点", "活动结束"])
     async def end_event_match(self, event: AstrMessageEvent, score: int):
