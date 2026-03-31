@@ -13,6 +13,7 @@ logger = logging.getLogger("MahjongPlugin")
 DATA_DIR = os.path.join("data", "plugins", "astrbot_mahjong_plugin")
 os.makedirs(DATA_DIR, exist_ok=True)
 DATA_FILE = os.path.join(DATA_DIR, "mahjong_data.json")
+EVENT_DATA_FILE = os.path.join(DATA_DIR, "event_data.json")
 
 @register("N_league", "Vege", "日麻对局记录插件", "2.0.0")
 class MahjongPlugin(Star):
@@ -22,6 +23,9 @@ class MahjongPlugin(Star):
         # 运行时缓存，用于存储当前正在进行的对局状态
         # 结构: { ctx_id: { "players": {uid: name}, "scores": {uid: score}, "status": "waiting/playing" } }
         self.active_matches = {}
+        # --- 活动场独立变量 ---
+        self.event_data = self._load_event_data()
+        self.event_matches = {} # 结构同 active_matches，专供活动场
 
     def _load_data(self) -> dict:
         if not os.path.exists(DATA_FILE):
@@ -103,7 +107,7 @@ class MahjongPlugin(Star):
             f"对局 #{match_id} 已建立！\n"
             f"选手 {user_name} 已加入！ (1/4)\n"
             f"请其他选手发送 /加入对局 加入。\n"
-            f"(多桌同开时请务必加上对局ID）\n"
+            f"(多桌同开时请输入 /加入对局 {match_id} 加入本桌）\n"
         )
 
     @command("mj_join", alias=["加入对局", "join"])
@@ -668,3 +672,297 @@ class MahjongPlugin(Star):
             yield event.plain_result("🔄 赛季数据已完全重置！\n所有积分已清零，新的赛季请加油！")
         else:
             yield event.plain_result("⚠️ 当前没有数据可重置。")
+
+    # =======================================================
+    # 🎉 活动专区 (当前为：超级加倍印第安麻将)
+    # =======================================================
+
+    def _load_event_data(self) -> dict:
+        if not os.path.exists(EVENT_DATA_FILE):
+            return {"status": {}, "groups": {}}
+        try:
+            with open(EVENT_DATA_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"加载活动数据失败: {e}")
+            return {"status": {}, "groups": {}}
+
+    def _save_event_data(self):
+        try:
+            with open(EVENT_DATA_FILE, "w", encoding="utf-8") as f:
+                json.dump(self.event_data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"保存活动数据失败: {e}")
+
+    def _get_user_event_match(self, ctx_id: str, user_id: str):
+        if ctx_id not in self.event_matches:
+            return None, None
+        for mid, match in self.event_matches[ctx_id].items():
+            if user_id in match["players"]:
+                return mid, match
+        return None, None
+
+    @command("mj_event_toggle", alias=["event"])
+    async def toggle_event(self, event: AstrMessageEvent):
+        """[管理员] 开启或关闭本群的活动场"""
+        ctx_id = self._get_context_id(event)
+        current_status = self.event_data.setdefault("status", {}).get(ctx_id, False)
+        
+        # 切换状态
+        self.event_data["status"][ctx_id] = not current_status
+        self._save_event_data()
+        
+        state_str = "🟢 已开启" if not current_status else "🔴 已关闭"
+        yield event.plain_result(f"📢 活动场 {state_str}！")
+
+    @command("mj_event_start", alias=["活动对局开始", "活动开始"])
+    async def start_event_match(self, event: AstrMessageEvent):
+        """开始一场活动对局"""
+        ctx_id = self._get_context_id(event)
+        
+        # 检查活动是否开放
+        if not self.event_data.get("status", {}).get(ctx_id, False):
+            yield event.plain_result("⚠️ 当前没有正在进行的活动")
+            return
+
+        user_id = event.get_sender_id()
+        user_name = event.get_sender_name()
+        
+        mid, existing_match = self._get_user_event_match(ctx_id, user_id)
+        if existing_match:
+            yield event.plain_result(f"⚠️ 你已经在活动局 #{mid} 中了！")
+            return
+
+        if ctx_id not in self.event_matches:
+            self.event_matches[ctx_id] = {}
+            
+        match_id = 1
+        while str(match_id) in self.event_matches[ctx_id]:
+            match_id += 1
+        match_id = str(match_id)
+
+        self.event_matches[ctx_id][match_id] = {
+            "players": {user_id: user_name},
+            "scores": {},
+            "status": "recruiting"
+        }
+        
+        yield event.plain_result(
+            f"活动场 #{match_id} 已建立！\n"
+            f"选手 {user_name} 已加入！ (1/4)\n"
+            f"请其他选手发送 /活动加入 加入\n"
+            f"(多桌同开时请发送 /活动加入 {match_id} 加入本桌)"
+        )
+
+    @command("mj_event_join", alias=["活动加入"])
+    async def join_event_match(self, event: AstrMessageEvent, match_id: str = ""):
+        """加入活动对局"""
+        ctx_id = self._get_context_id(event)
+        if not self.event_data.get("status", {}).get(ctx_id, False):
+            yield event.plain_result("⚠️ 活动场未开放。")
+            return
+
+        user_id = event.get_sender_id()
+        user_name = event.get_sender_name()
+        match_id = str(match_id).strip()
+
+        mid, existing_match = self._get_user_event_match(ctx_id, user_id)
+        if existing_match:
+            yield event.plain_result(f"👉 {user_name} 已经在活动局 #{mid} 中了。")
+            return
+
+        if ctx_id not in self.event_matches or not self.event_matches[ctx_id]:
+            yield event.plain_result("⚠️ 当前没有招募中的活动局，请发送 /活动对局开始")
+            return
+
+        target_match, target_mid = None, None
+        if match_id:
+            if match_id in self.event_matches[ctx_id]:
+                target_match = self.event_matches[ctx_id][match_id]
+                target_mid = match_id
+            else:
+                yield event.plain_result(f"⚠️ 找不到活动局 #{match_id}。")
+                return
+        else:
+            recruiting_matches = {k: v for k, v in self.event_matches[ctx_id].items() if v["status"] == "recruiting"}
+            if not recruiting_matches:
+                yield event.plain_result("QAQ 所有的活动局都已经开始了……")
+                return
+            elif len(recruiting_matches) == 1:
+                target_mid, target_match = list(recruiting_matches.items())[0]
+            else:
+                yield event.plain_result(f"⚠️ 有多个活动局在招募，请指定桌号，如 /活动加入 {list(recruiting_matches.keys())[0]}")
+                return
+
+        if target_match["status"] != "recruiting":
+            yield event.plain_result(f"⚠️ 活动局 #{target_mid} 已开始。")
+            return
+        if len(target_match["players"]) >= 4:
+            yield event.plain_result(f"🚫 活动局 #{target_mid} 人满了！")
+            return
+
+        target_match["players"][user_id] = user_name
+        current_count = len(target_match["players"])
+
+        if current_count == 4:
+            target_match["status"] = "playing"
+            winds = ["东", "南", "西", "北"]
+            player_list = list(target_match["players"].values())
+            import random
+            random.shuffle(player_list)
+            players_list_str = "\n".join([f"{winds[i]}家: {name}" for i, name in enumerate(player_list)])
+            
+            yield event.plain_result(
+                f"✅ 活动局 #{target_mid} 集结完毕，GAME START！\n"
+                f"{players_list_str}\n\n"
+                f"每局开始前请重新抽取NG卡片！\n"
+                f"🏁 对局结束后请发送：/活动得点 [点数]"
+            )
+        else:
+            yield event.plain_result(f"选手 {user_name} 加入活动局 #{target_mid} ！ ({current_count}/4)")
+
+    @command("mj_event_cancel", alias=["活动取消", "活动解散"])
+    async def cancel_event_match(self, event: AstrMessageEvent):
+        ctx_id = self._get_context_id(event)
+        user_id = event.get_sender_id()
+        mid, match = self._get_user_event_match(ctx_id, user_id)
+        
+        if match:
+            del self.event_matches[ctx_id][mid]
+            if not self.event_matches[ctx_id]:
+                del self.event_matches[ctx_id]
+            yield event.plain_result(f"🚫 已解散活动局 #{mid}。")
+        else:
+            yield event.plain_result("⚠️ 你当前不在活动局中。")
+
+    @command("mj_event_ng", alias=["NG", "ng"])
+    async def record_event_ng(self, event: AstrMessageEvent):
+        """记录选手的NG次数"""
+        ctx_id = self._get_context_id(event)
+        ctx_data = self.event_data.setdefault("groups", {}).setdefault(ctx_id, {})
+        
+        target_uid = None
+        for comp in event.get_messages():
+            if isinstance(comp, At):
+                target_uid = str(comp.qq)
+                break
+        
+        if not target_uid:
+            yield event.plain_result("⚠️ 请 @ 触犯了NG内容的选手。\n示例: /活动ng @某人")
+            return
+            
+        if target_uid not in ctx_data:
+            ctx_data[target_uid] = {"name": f"用户{target_uid}", "total_pt": 0.0, "total_matches": 0, "total_score": 0, "ng_count": 0}
+            
+        user_data = ctx_data[target_uid]
+        # 兼容旧字段
+        if "ng_count" not in user_data:
+            user_data["ng_count"] = 0
+            
+        user_data["ng_count"] += 1
+        self._save_event_data()
+        
+        yield event.plain_result(f"🚨 NG 记录！\n选手 {user_data['name']} NG次数+1 \n当前累计NG次数：{user_data['ng_count']} 次" \n ohno)
+
+    @command("mj_event_end", alias=["活动得点", "活动结束"])
+    async def end_event_match(self, event: AstrMessageEvent, score: int):
+        """记录活动局分数（仅素点，总和40w）"""
+        ctx_id = self._get_context_id(event)
+        user_id = event.get_sender_id()
+        
+        mid, match = self._get_user_event_match(ctx_id, user_id)
+        if not match:
+            yield event.plain_result("⚠️ 你当前不在活动局中")
+            return
+        if match["status"] != "playing":
+            yield event.plain_result(f"⚠️ 活动局 #{mid} 人未满")
+            return
+
+        match["scores"][user_id] = score
+        submitted_count = len(match["scores"])
+        
+        if submitted_count == 4:
+            total_score = sum(match["scores"].values())
+            # 活动场初始10万点，4人合计40万点
+            if total_score != 400000:
+                diff = total_score - 400000
+                diff_str = f"+{diff}" if diff > 0 else f"{diff}"
+                details_str = "\n".join([f"{match['players'][uid]}: {s}" for uid, s in match["scores"].items()])
+                yield event.plain_result(
+                    f"⚠️ 活动局 #{mid} 点数核算不通过\n"
+                    f"四家得点之和为 {total_score} (误差 {diff_str})\n"
+                    f"目标: 400000\n----------------\n当前提交:\n{details_str}\n"
+                    f"👉 请发送 /活动得点 [正确点数] 修正。"
+                )
+                return 
+
+            # 结算逻辑
+            sorted_scores = sorted(match["scores"].items(), key=lambda x: x[1], reverse=True)
+            ctx_data = self.event_data.setdefault("groups", {}).setdefault(ctx_id, {})
+            result_msg = [f"🃏 活动对局结束"]
+
+            for rank_idx, (uid, s) in enumerate(sorted_scores):
+                username = match["players"][uid]
+                # 活动场无顺位马，仅素点: (分数 - 100000) / 1000
+                pt = round((s - 100000) / 1000.0, 1)
+                pt_str = f"+{pt}" if pt > 0 else f"{pt}"
+
+                user_stat = ctx_data.setdefault(uid, {
+                    "name": username, "total_pt": 0.0, "total_matches": 0, "total_score": 0, "ng_count": 0
+                })
+                if "ng_count" not in user_stat: user_stat["ng_count"] = 0
+
+                user_stat["name"] = username
+                user_stat["total_pt"] = round(user_stat["total_pt"] + pt, 1)
+                user_stat["total_matches"] += 1
+                user_stat["total_score"] += s
+
+                result_msg.append(f"{rank_idx+1}位 {username}: {s} ({pt_str}pt)")
+
+            self._save_event_data()
+            del self.event_matches[ctx_id][mid]
+            if not self.event_matches[ctx_id]:
+                del self.event_matches[ctx_id]
+            
+            yield event.plain_result("\n".join(result_msg))
+        else:
+            yield event.plain_result(f"💾 活动分数已记录 ({submitted_count}/4)")
+
+    @command("mj_event_rank", alias=["活动榜", "活动排行", "活动rank"])
+    async def show_event_rank(self, event: AstrMessageEvent):
+        """展示活动场的三大奖项排行"""
+        ctx_id = self._get_context_id(event)
+        ctx_data = self.event_data.get("groups", {}).get(ctx_id, {})
+        
+        if not ctx_data:
+            yield event.plain_result("⚠️ 暂无活动记录。")
+            return
+
+        users = list(ctx_data.values())
+        if not users:
+            return
+
+        msg = ["🏆 **【超级加倍印第安】活动大赏** 🏆\n"]
+
+        # 1. MVP赏 (PT最高)
+        mvp_list = sorted(users, key=lambda x: x["total_pt"], reverse=True)[:3]
+        msg.append("👑 【MVP赏】 (总PT排行)")
+        for i, u in enumerate(mvp_list):
+            msg.append(f"  {i+1}. {u['name']} — {u['total_pt']} pt")
+        msg.append("")
+
+        # 2. 手气最佳赏 (平均得点最高)
+        luck_list = sorted(users, key=lambda x: x["total_score"] / x["total_matches"] if x["total_matches"] > 0 else 0, reverse=True)[:3]
+        msg.append("🍀 【手气最佳赏】 (均点排行)")
+        for i, u in enumerate(luck_list):
+            avg = int(u["total_score"] / u["total_matches"]) if u["total_matches"] > 0 else 0
+            msg.append(f"  {i+1}. {u['name']} — {avg} 点 ({u['total_matches']}场)")
+        msg.append("")
+
+        # 3. NG赏 (NG次数最多)
+        ng_list = sorted(users, key=lambda x: x.get("ng_count", 0), reverse=True)[:3]
+        msg.append("🚨 【NG赏】 (NG次数排行)")
+        for i, u in enumerate(ng_list):
+            msg.append(f"  {i+1}. {u['name']} — NG {u.get('ng_count', 0)} 次")
+
+        yield event.plain_result("\n".join(msg))
