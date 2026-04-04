@@ -945,14 +945,14 @@ class MahjongPlugin(Star):
         msg = ["🏆 **【超级加倍印第安】活动大赏** 🏆\n"]
 
         # 1. MVP赏 (PT最高)
-        mvp_list = sorted(users, key=lambda x: x["total_pt"], reverse=True)[:3]
+        mvp_list = sorted(users, key=lambda x: x["total_pt"], reverse=True)
         msg.append("👑 【MVP赏】 (总PT排行)")
         for i, u in enumerate(mvp_list):
             msg.append(f"  {i+1}. {u['name']} — {u['total_pt']} pt")
         msg.append("")
 
         # 2. 手气最佳赏 (平均得点最高)
-        luck_list = sorted(users, key=lambda x: x["total_score"] / x["total_matches"] if x["total_matches"] > 0 else 0, reverse=True)[:3]
+        luck_list = sorted(users, key=lambda x: x["total_score"] / x["total_matches"] if x["total_matches"] > 0 else 0, reverse=True)
         msg.append("🍀 【手气最佳赏】 (均点排行)")
         for i, u in enumerate(luck_list):
             avg = int(u["total_score"] / u["total_matches"]) if u["total_matches"] > 0 else 0
@@ -960,7 +960,7 @@ class MahjongPlugin(Star):
         msg.append("")
 
         # 3. NG赏 (NG次数最多)
-        ng_list = sorted(users, key=lambda x: x.get("ng_count", 0), reverse=True)[:3]
+        ng_list = sorted(users, key=lambda x: x.get("ng_count", 0), reverse=True)
         msg.append("🚨 【NG赏】 (NG次数排行)")
         for i, u in enumerate(ng_list):
             msg.append(f"  {i+1}. {u['name']} — NG {u.get('ng_count', 0)} 次")
