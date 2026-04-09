@@ -605,7 +605,7 @@ class MahjongPlugin(Star):
             # 1. 计算常规赛最终排位分 (含罚分逻辑)
             raw_pt = user["total_pt"]
             matches = user["total_matches"]
-            penalty = max(0, 18 - matches) * 50
+            penalty = max(0, 20 - matches) * 50
             ranking_pt = raw_pt - penalty
             
             # 2. 备份数据 (评奖用)
@@ -613,7 +613,7 @@ class MahjongPlugin(Star):
             user["regular_ranking_pt"] = ranking_pt  # 罚分后的排位分
             
             # 3. 决赛初始分 = 排位分 / 2
-            start_pt = round(ranking_pt / 2, 1)
+            start_pt = round(ranking_pt / 4, 1)
             user["total_pt"] = start_pt
             
             # 4. 标记决赛身份
@@ -649,10 +649,10 @@ class MahjongPlugin(Star):
         
         finalists.sort(key=lambda x: x["total_pt"], reverse=True)
 
-        msg = ["🏆 **决赛 实时排位**", "(起始分 = 常规赛排位分 / 2)"]
+        msg = ["🏆 **决赛 实时排位**", "(起始分 = 常规赛排位分 / 4)"]
         for i, user in enumerate(finalists):
             # 显示格式：排名. 名字 — 当前总分 (决赛起始分: xxx)
-            start_pt = user.get("regular_ranking_pt", 0) / 2 # 重新算一下仅仅为了展示，或者取 total_pt
+            start_pt = user.get("regular_ranking_pt", 0) / 4 # 重新算一下仅仅为了展示，或者取 total_pt
             # 其实直接显示当前分即可，因为 total_pt 已经是折半后+决赛变动的总和了
             msg.append(f"{i+1}. {user['name']} — {user['total_pt']} pt")
             
