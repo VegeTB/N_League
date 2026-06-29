@@ -105,6 +105,7 @@ class MahjongPlugin(Star):
         
         yield event.plain_result(
             f"对局 #{match_id} 已建立！\n"
+            f"规则：N.League规则\n"
             f"选手 {user_name} 已加入！ (1/4)\n"
             f"请其他选手发送 /加入对局 加入。\n"
             f"(多桌同开时请输入 /加入对局 {match_id} 加入本桌）\n"
