@@ -159,11 +159,11 @@ class MahjongPlugin(Star):
             match_uids = list(target_match["players"].keys())
             stage_tip = ""
             if stage == "finals" and all(ctx_data.get(uid, {}).get("is_finalist") for uid in match_uids):
-                stage_tip = "\n👑 本桌 4 人全为决赛选手：【总决赛对局】！"
+                stage_tip = "\n👑 【决赛对局】"
             elif stage in ["playoffs", "finals"] and all(ctx_data.get(uid, {}).get("is_playoff_qualifier") for uid in match_uids):
-                stage_tip = "\n🏆 本桌 4 人全为季后赛选手：【季后赛对局】！"
+                stage_tip = "\n🏆 【季后赛对局】"
             elif stage in ["playoffs", "finals"]:
-                stage_tip = "\n🀄 本桌含非晋级选手：【常规/段位对局】（不计入季后赛/决赛）"
+                stage_tip = "\n🀄 本桌含非晋级选手：【常规对局】"
 
             yield event.plain_result(
                 f"✅ 对局 #{target_mid} 集结完毕，GAME START！\n{players_list_str}{stage_tip}\n\n"
@@ -390,7 +390,7 @@ class MahjongPlugin(Star):
 
         stage = ctx_data.get("stage", "regular")
         if stage == "finals":
-            yield event.plain_result("👑 当前处于总决赛阶段，请使用 /决赛榜 查询总决赛战况。\n以下显示常规赛历史数据：")
+            yield event.plain_result("👑 当前处于决赛阶段，请使用 /决赛榜 查询决赛战况。\n以下显示常规赛历史数据：")
         elif stage == "playoffs":
             yield event.plain_result("🏆 当前处于季后赛阶段，请使用 /季后赛榜 查询季后赛战况。\n以下显示常规赛历史数据：")
 
@@ -407,7 +407,7 @@ class MahjongPlugin(Star):
             
         # 2. 排位 PT 榜 (前 60 战封顶，20 战门槛罚分)
         elif query_type in ["排位", "排名", "排位pt", "ranking"]:
-            msg_header = "🏆 **赛季排位榜 (前60战封顶，门槛20战)**"
+            msg_header = "🏆 赛季排位榜"
             ranked_list = []
             for uid, data in users:
                 reg_matches = data.get("regular_matches", data.get("total_matches", 0))
@@ -430,21 +430,21 @@ class MahjongPlugin(Star):
                 msg_lines.append(f"{i+1}. {data['name']}{mark} — {r_pt} pt {note} [{reg_m}/20战]{cap_note}")
 
         elif query_type in ["位次", "一位率"]:
-            msg_header = "👑 **一位次数 排行榜**"
+            msg_header = "👑 一位次数 排行榜"
             sorted_users = sorted(users, key=lambda x: (x[1]["ranks"][0], -x[1]["total_matches"]), reverse=True)
             msg_lines = [msg_header]
             for i, (uid, data) in enumerate(sorted_users):
                 msg_lines.append(f"{i+1}. {data['name']} — 一位 {data['ranks'][0]} 次 / {data['total_matches']} 场")
             
         elif query_type in ["最高得点", "最大得点"]:
-            msg_header = "💥 **单场最高得点 排行榜**"
+            msg_header = "💥 单场最高得点 排行榜"
             sorted_users = sorted(users, key=lambda x: x[1]["max_score"], reverse=True)
             msg_lines = [msg_header]
             for i, (uid, data) in enumerate(sorted_users):
                 msg_lines.append(f"{i+1}. {data['name']} — {data['max_score']} 点")
             
         elif query_type in ["避四率", "避四"]:
-            msg_header = "🛡️ **避四率 排行榜** (至少5场)"
+            msg_header = "🛡️ 避四率 排行榜 (至少5场)"
             valid_users = [u for u in users if u[1]["total_matches"] >= 5]
             sorted_users = sorted(valid_users, key=lambda x: x[1]["avoid_4_rate"], reverse=True)
             msg_lines = [msg_header]
@@ -524,15 +524,15 @@ class MahjongPlugin(Star):
             f"🔢 ===常规赛排位===",
             f"• 生涯总PT: {user['total_pt']} pt (第 {raw_rank} 名)",
             f"• 常规排位PT: {current_ranking_pt} pt (第 {ranking_rank} 名)",
-            f"  *(有效前60战: {min(reg_m, 60)}/60 | 罚分: -{current_penalty} pt)*",
+            f"  (有效前60战: {min(reg_m, 60)}/60 | 罚分: -{current_penalty} pt)",
             f"",
-            f"📈 ===对局详情=== (共 {total_games} 场)",
+            f"📈 ===赛季对局详情=== (共 {total_games} 场)",
             f"🥇 一位率: {rates[0]} ({ranks[0]}回)",
             f"🥈 二位率: {rates[1]} ({ranks[1]}回)",
             f"🥉 三位率: {rates[2]} ({ranks[2]}回)",
             f"💀 四位率: {rates[3]} ({ranks[3]}回)",
             f"",
-            f"📐 ===均值统计===",
+            f"📐 ===赛季统计===",
             f"• 平均顺位: {avg_rank_val:.2f}",
             f"• 平均得点: {avg_score}",
             f"• 最高得点: {user['max_score']}",
@@ -679,7 +679,7 @@ class MahjongPlugin(Star):
             yield event.plain_result(f"⚠️ 必须指定 4 位决赛选手！当前检测到 {len(target_uids)} 人。")
             return
 
-        msg_lines = ["👑 **已正式进入总决赛（4强争冠）**", "----------------"]
+        msg_lines = ["👑 已正式进入总决赛（4强争冠）", "----------------"]
         for uid in target_uids:
             if uid not in ctx_data:
                 ctx_data[uid] = {
@@ -718,13 +718,13 @@ class MahjongPlugin(Star):
         ctx_data = self.data.get(ctx_id, {})
         
         if ctx_data.get("stage") != "finals":
-            yield event.plain_result("⚠️ 当前未开启总决赛，请使用 /季后赛榜 或 /rank 查询。")
+            yield event.plain_result("⚠️ 当前未开启决赛，请使用 /季后赛榜 或 /rank 查询。")
             return
 
         finalists = [d for d in ctx_data.values() if isinstance(d, dict) and d.get("is_finalist")]
         finalists.sort(key=lambda x: x.get("finals_pt", 0.0), reverse=True)
 
-        msg = ["👑 **【总决赛 实时排位榜】** 👑", "========================"]
+        msg = ["👑【决赛 实时排位榜】👑", "========================"]
         for i, user in enumerate(finalists):
             msg.append(f" {i+1}. {user['name']} — {user.get('finals_pt', 0.0)} pt (出战: {user.get('finals_matches', 0)}战)")
             
@@ -746,7 +746,7 @@ class MahjongPlugin(Star):
             yield event.plain_result("⚠️ 当前没有数据可重置。")
 
     # =======================================================
-    # 🎉 活动专区 (超级加倍印第安麻将，完全原模原样套用)
+    # 🎉 活动专区 (超级加倍印第安麻将)
     # =======================================================
 
     def _load_event_data(self) -> dict:
