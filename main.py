@@ -745,9 +745,25 @@ class MahjongPlugin(Star):
         else:
             yield event.plain_result("⚠️ 当前没有数据可重置。")
 
+# =======================================================
+    # 🎉 活动专区 (当前为：【声优吃的奇妙冒险】JOJO替身麻将)
     # =======================================================
-    # 🎉 活动专区 (超级加倍印第安麻将)
-    # =======================================================
+
+    # 12 种「STAND POWER」替身能力一览表
+    STAND_POWERS = [
+        ("白金之星", "这巡内你的舍张不能被荣和。不构成振听"),
+        ("世界", "这巡内的摸牌改为摸三枚，再依次打出，打出的牌可以被鸣或荣和，但不会打断你的回合（不破坏两立直、天和）"),
+        ("隐者之紫", "指定一家，你可以用搓牌的方式检查他的听牌搭子（多面听则必须包括所有待牌可能），若那家实际未听，能力失效"),
+        ("疯狂钻石", "允许一次立直后的手切，由此导致的未听不计为诈立直，也不破坏立直状态"),
+        ("轰炸空间", "吃副露可以吃任何一家"),
+        ("天堂之门", "你可以用一枚手牌和场上的任意一枚正面朝上的牌替换，若换的牌是副露，仍然视为合法生效的原副露。会构成振听"),
+        ("败者食尘", "立直时使用。指定一家，同时公布你的待牌，当他摸到你的铳张时必须摸切，你不再能够荣和其他家或自摸，但对你自己不构成振听。"),
+        ("绯红之王", "摸牌前使用。移除牌山中的接下来四枚牌，你可以查看这四枚牌，海底巡不可发动"),
+        ("回音A.C.T.3", "现在起的两巡内，其他家不能副露鸣牌和立直"),
+        ("天堂制造", "现在起的两巡内，其他家不能手切，可被除你以外的副露破坏"),
+        ("黄金体验镇魂曲", "你始终不会振听，但流局始终视为未听"),
+        ("天气预报", "切牌前使用。将你的一枚手牌和牌山里的一枚牌替换（宝牌指示牌除外）")
+    ]
 
     def _load_event_data(self) -> dict:
         if not os.path.exists(EVENT_DATA_FILE):
@@ -774,20 +790,22 @@ class MahjongPlugin(Star):
                 return mid, match
         return None, None
 
-    @command("mj_event_toggle", alias=["event"])
+    @command("mj_event_toggle", alias=["event", "活动开关"])
     async def toggle_event(self, event: AstrMessageEvent):
+        """[管理员] 开启或关闭本群的活动场"""
         ctx_id = self._get_context_id(event)
         current_status = self.event_data.setdefault("status", {}).get(ctx_id, False)
         self.event_data["status"][ctx_id] = not current_status
         self._save_event_data()
         state_str = "🟢 已开启" if not current_status else "🔴 已关闭"
-        yield event.plain_result(f"📢 活动场 {state_str}！")
+        yield event.plain_result(f"📢 活动场【声优吃的奇妙冒险】 {state_str}！")
 
     @command("mj_event_start", alias=["活动对局开始", "活动开始"])
     async def start_event_match(self, event: AstrMessageEvent):
+        """开始一场活动对局，并在开桌后独立推送本局抽取的6个替身"""
         ctx_id = self._get_context_id(event)
         if not self.event_data.get("status", {}).get(ctx_id, False):
-            yield event.plain_result("⚠️ 当前没有正在进行的活动")
+            yield event.plain_result("⚠️ 当前没有正在进行的活动，请管理员使用 /活动开关 开启。")
             return
 
         user_id = event.get_sender_id()
@@ -805,22 +823,20 @@ class MahjongPlugin(Star):
         while str(match_id) in self.event_matches[ctx_id]:
             match_id += 1
         match_id = str(match_id)
-
-        self.event_matches[ctx_id][match_id] = {
-            "players": {user_id: user_name},
-            "scores": {},
-            "status": "recruiting"
-        }
         
+        # 常规开桌信息
         yield event.plain_result(
-            f"活动场 #{match_id} 已建立！\n"
-            f"选手 {user_name} 已加入！ (1/4)\n"
+            f"🃏 活动场 #{match_id} 已建立！\n"
+            f"替身使者 {user_name} 已就位！ (1/4)\n"
             f"请其他选手发送 /活动加入 加入\n"
             f"(多桌同开时请发送 /活动加入 {match_id} 加入本桌)"
         )
 
+
+
     @command("mj_event_join", alias=["活动加入"])
     async def join_event_match(self, event: AstrMessageEvent, match_id: str = ""):
+        """加入活动对局"""
         ctx_id = self._get_context_id(event)
         if not self.event_data.get("status", {}).get(ctx_id, False):
             yield event.plain_result("⚠️ 活动场未开放。")
@@ -873,16 +889,43 @@ class MahjongPlugin(Star):
             winds = ["东", "南", "西", "北"]
             player_list = list(target_match["players"].values())
             random.shuffle(player_list)
-            players_list_str = "\n".join([f"{winds[i]}家: {name}" for i, name in enumerate(player_list)])
+            
+            # 记录东南西北对应的选手名字
+            wind_map = {winds[i]: player_list[i] for i in range(4)}
+            players_list_str = "\n".join([f"{w}家: {wind_map[w]}" for w in winds])
             
             yield event.plain_result(
                 f"✅ 活动局 #{target_mid} 集结完毕，GAME START！\n"
                 f"{players_list_str}\n\n"
-                f"每局开始前请重新抽取NG卡片！\n"
+                f"⚡️ 请按替身选择顺序依次挑选能力：\n"
+                f"👉 **北家 ({wind_map['北']}) ➔ 西家 ({wind_map['西']}) ➔ 南家 ({wind_map['南']}) ➔ 东家 ({wind_map['东']})**\n\n"
                 f"🏁 对局结束后请发送：/活动得点 [点数]"
             )
+    
+            # 随机抽取 6 个候选替身能力
+            selected_stands = random.sample(self.STAND_POWERS, 6)
+    
+            self.event_matches[ctx_id][match_id] = {
+                "players": {user_id: user_name},
+                "scores": {},
+                "status": "recruiting",
+                "stands": selected_stands
+            }
+                
+            # 单独发送抽中的 6 个替身能力清单
+            stand_lines = [
+                f"🔮 【活动场 #{match_id} 可选「STAND POWER」】",
+                "----------------------------------------"
+            ]
+            for idx, (s_name, s_desc) in enumerate(selected_stands):
+                stand_lines.append(f"{idx+1}. 「{s_name}」\n   {s_desc}")
+            stand_lines.append("----------------------------------------")
+            stand_lines.append("📌 挑选顺序：北家 ➔ 西家 ➔ 南家 ➔ 东家")
+    
+            yield event.plain_result("\n".join(stand_lines))
+            
         else:
-            yield event.plain_result(f"选手 {user_name} 加入活动局 #{target_mid} ！ ({current_count}/4)")
+            yield event.plain_result(f"替身使者 {user_name} 加入活动局 #{target_mid} ！ ({current_count}/4)")
 
     @command("mj_event_cancel", alias=["活动取消", "活动解散"])
     async def cancel_event_match(self, event: AstrMessageEvent):
@@ -898,35 +941,9 @@ class MahjongPlugin(Star):
         else:
             yield event.plain_result("⚠️ 你当前不在活动局中。")
 
-    @command("mj_event_ng", alias=["NG", "ng"])
-    async def record_event_ng(self, event: AstrMessageEvent):
-        ctx_id = self._get_context_id(event)
-        ctx_data = self.event_data.setdefault("groups", {}).setdefault(ctx_id, {})
-        
-        target_uid = None
-        for comp in event.get_messages():
-            if isinstance(comp, At):
-                target_uid = str(comp.qq)
-                break
-        
-        if not target_uid:
-            yield event.plain_result("⚠️ 请 @ 触犯了NG内容的选手。\n示例: /活动ng @某人")
-            return
-            
-        if target_uid not in ctx_data:
-            ctx_data[target_uid] = {"name": f"用户{target_uid}", "total_pt": 0.0, "total_matches": 0, "total_score": 0, "ng_count": 0}
-            
-        user_data = ctx_data[target_uid]
-        if "ng_count" not in user_data:
-            user_data["ng_count"] = 0
-            
-        user_data["ng_count"] += 1
-        self._save_event_data()
-        
-        yield event.plain_result(f"🚨 NG 记录！\n选手 {user_data['name']} NG次数+1 \n当前累计NG次数：{user_data['ng_count']} 次 \n ohno")
-
     @command("mj_event_end", alias=["活动得点", "活动结束"])
     async def end_event_match(self, event: AstrMessageEvent, score: int):
+        """记录活动局分数（25000持点，30000返点，马点+50/+15/-15/-30）"""
         ctx_id = self._get_context_id(event)
         user_id = event.get_sender_id()
         
@@ -943,38 +960,61 @@ class MahjongPlugin(Star):
         
         if submitted_count == 4:
             total_score = sum(match["scores"].values())
-            if total_score != 400000:
-                diff = total_score - 400000
+            # 25000持点，4家总计100000点
+            if total_score != 100000:
+                diff = total_score - 100000
                 diff_str = f"+{diff}" if diff > 0 else f"{diff}"
                 details_str = "\n".join([f"{match['players'][uid]}: {s}" for uid, s in match["scores"].items()])
                 yield event.plain_result(
                     f"⚠️ 活动局 #{mid} 点数核算不通过\n"
                     f"四家得点之和为 {total_score} (误差 {diff_str})\n"
-                    f"目标: 400000\n----------------\n当前提交:\n{details_str}\n"
+                    f"目标: 100000\n----------------\n当前提交:\n{details_str}\n"
                     f"👉 请发送 /活动得点 [正确点数] 修正。"
                 )
                 return 
 
             sorted_scores = sorted(match["scores"].items(), key=lambda x: x[1], reverse=True)
             ctx_data = self.event_data.setdefault("groups", {}).setdefault(ctx_id, {})
-            result_msg = [f"🃏 活动对局结束"]
+            result_msg = [f"🃏 **活动对局 #{mid} 结算**"]
 
-            for rank_idx, (uid, s) in enumerate(sorted_scores):
-                username = match["players"][uid]
-                pt = round((s - 100000) / 1000.0, 1)
-                pt_str = f"+{pt}" if pt > 0 else f"{pt}"
+            # 活动专用马点: +50 / +15 / -15 / -30 (30000返点)
+            UMA_SLOTS = [50.0, 15.0, -15.0, -30.0]
+            ICONS = ["🥇", "🥈", "🥉", "💀"]
 
-                user_stat = ctx_data.setdefault(uid, {
-                    "name": username, "total_pt": 0.0, "total_matches": 0, "total_score": 0, "ng_count": 0
-                })
-                if "ng_count" not in user_stat: user_stat["ng_count"] = 0
+            # 处理同分平分马点
+            i = 0
+            while i < len(sorted_scores):
+                j = i + 1
+                while j < len(sorted_scores) and sorted_scores[j][1] == sorted_scores[i][1]:
+                    j += 1
+                
+                current_umas = UMA_SLOTS[i:j]
+                avg_uma = sum(current_umas) / len(current_umas)
 
-                user_stat["name"] = username
-                user_stat["total_pt"] = round(user_stat["total_pt"] + pt, 1)
-                user_stat["total_matches"] += 1
-                user_stat["total_score"] += s
+                for k in range(i, j):
+                    uid, s = sorted_scores[k]
+                    username = match["players"][uid]
+                    
+                    # 返点 30000: (得点 - 30000) / 1000 + 马点
+                    base_pt = (s - 30000) / 1000.0
+                    pt = round(base_pt + avg_uma, 1)
+                    pt_str = f"+{pt}" if pt > 0 else f"{pt}"
 
-                result_msg.append(f"{rank_idx+1}位 {username}: {s} ({pt_str}pt)")
+                    user_stat = ctx_data.setdefault(uid, {
+                        "name": username, "total_pt": 0.0, "total_matches": 0,
+                        "total_score": 0, "max_score": 0, "ranks": [0, 0, 0, 0]
+                    })
+
+                    user_stat["name"] = username
+                    user_stat["total_pt"] = round(user_stat["total_pt"] + pt, 1)
+                    user_stat["total_matches"] += 1
+                    user_stat["total_score"] += s
+                    user_stat["ranks"][i] += 1
+                    if s > user_stat.get("max_score", 0):
+                        user_stat["max_score"] = s
+
+                    result_msg.append(f"{ICONS[i]} {username}: {s} ({pt_str}pt)")
+                i = j
 
             self._save_event_data()
             del self.event_matches[ctx_id][mid]
@@ -987,6 +1027,7 @@ class MahjongPlugin(Star):
 
     @command("mj_event_rank", alias=["活动榜", "活动排行", "活动rank"])
     async def show_event_rank(self, event: AstrMessageEvent):
+        """展示【声优吃的奇妙冒险】活动排行榜"""
         ctx_id = self._get_context_id(event)
         ctx_data = self.event_data.get("groups", {}).get(ctx_id, {})
         
@@ -998,24 +1039,12 @@ class MahjongPlugin(Star):
         if not users:
             return
 
-        msg = ["🏆 **【超级加倍印第安】活动大赏** 🏆\n"]
+        # 按活动总PT从高到低排序
+        users.sort(key=lambda x: x["total_pt"], reverse=True)
 
-        mvp_list = sorted(users, key=lambda x: x["total_pt"], reverse=True)
-        msg.append("👑 【MVP赏】 (总PT排行)")
-        for i, u in enumerate(mvp_list):
-            msg.append(f"  {i+1}. {u['name']} — {u['total_pt']} pt")
-        msg.append("")
-
-        luck_list = sorted(users, key=lambda x: x["total_score"] / x["total_matches"] if x["total_matches"] > 0 else 0, reverse=True)
-        msg.append("🍀 【手气最佳赏】 (均点排行)")
-        for i, u in enumerate(luck_list):
-            avg = int(u["total_score"] / u["total_matches"]) if u["total_matches"] > 0 else 0
-            msg.append(f"  {i+1}. {u['name']} — {avg} 点 ({u['total_matches']}场)")
-        msg.append("")
-
-        ng_list = sorted(users, key=lambda x: x.get("ng_count", 0), reverse=True)
-        msg.append("🚨 【NG赏】 (NG次数排行)")
-        for i, u in enumerate(ng_list):
-            msg.append(f"  {i+1}. {u['name']} — NG {u.get('ng_count', 0)} 次")
+        msg = ["🏆 【声优吃的奇妙冒险】活动战力榜 🏆\n"]
+        for i, u in enumerate(users):
+            avg_pts = int(u["total_score"] / u["total_matches"]) if u["total_matches"] > 0 else 0
+            msg.append(f" {i+1}. {u['name']} — {u['total_pt']} pt [试合:{u['total_matches']} | 均点:{avg_pts} | 最高:{u.get('max_score', 0)}]")
 
         yield event.plain_result("\n".join(msg))
