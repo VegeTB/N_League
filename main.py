@@ -375,6 +375,162 @@ class MahjongPlugin(Star):
         )
 
     # -------------------------------------------------------
+    # 🛠️ 常规赛管理运维工具 (手动补录战绩)
+    # -------------------------------------------------------
+
+    @command("mj_manual_record", alias=["补录", "对局补录", "录分", "常规补录", "手动录分", "强制录分"])
+    async def record_regular_manual(self, event: AstrMessageEvent):
+        """
+        [管理员] 手动/强制补录一次常规赛(M规)成绩
+        用法支持以下两种格式（点数按@的顺序对应）：
+          格式1: /补录 @选手A 42000 @选手B 28000 @选手C 18000 @选手D 12000
+          格式2: /补录 @选手A @选手B @选手C @选手D 42000 28000 18000 12000
+        """
+        ctx_id = self._get_context_id(event)
+        
+        # 1. 提取被 @ 的 4 位选手
+        target_uids = []
+        for comp in event.get_messages():
+            if isinstance(comp, At):
+                target_uids.append(str(comp.qq))
+        
+        unique_uids = list(dict.fromkeys(target_uids)) # 保持顺序去重
+        if len(unique_uids) != 4:
+            yield event.plain_result(
+                "⚠️ 格式错误！必须同时 @ 4 位不同的选手。\n"
+                "👉 正确示例：\n"
+                "/补录 @选手1 42000 @选手2 28000 @选手3 18000 @选手4 12000\n"
+                "或\n"
+                "/补录 @选手1 @选手2 @选手3 @选手4 42000 28000 18000 12000"
+            )
+            return
+
+        # 2. 从纯文本中提取 4 个点数
+        plain_texts = []
+        for comp in event.get_messages():
+            if not isinstance(comp, At) and hasattr(comp, 'text'):
+                plain_texts.append(comp.text)
+        
+        combined_text = " ".join(plain_texts)
+        for cmd in ["/mj_manual_record", "/补录", "/对局补录", "/录分", "/常规补录", "/手动录分", "/强制录分"]:
+            combined_text = combined_text.replace(cmd, "")
+            
+        scores_raw = re.findall(r'-?\d+', combined_text)
+        if len(scores_raw) != 4:
+            yield event.plain_result(f"⚠️ 点数数量不匹配！检测到 {len(scores_raw)} 个有效数值，必须依次提供 4 家的点数。")
+            return
+
+        scores = [int(s) for s in scores_raw]
+        
+        # 3. 校验总和 100000 (M规持点25000*4)
+        total_score = sum(scores)
+        if total_score != 100000:
+            diff = total_score - 100000
+            diff_str = f"+{diff}" if diff > 0 else f"{diff}"
+            yield event.plain_result(
+                f"⚠️ 点数核算失败！\n"
+                f"四家得点总和为: {total_score} (误差 {diff_str})\n"
+                f"目标总和: 100000 (2.5w持点*4)\n"
+                f"👉 请检查点数是否有误并重新录入。"
+            )
+            return
+
+        # 4. 获取选手昵称并配对
+        ctx_data = self.data.setdefault(ctx_id, {})
+        player_entries = []
+        for uid, s in zip(unique_uids, scores):
+            name = f"用户{uid}"
+            if uid in ctx_data and ctx_data[uid].get("name"):
+                name = ctx_data[uid]["name"]
+            player_entries.append((uid, name, s))
+
+        # 5. 校验当前对局性质 (自动识别：总决赛 / 季后赛 / 常规赛)
+        stage = ctx_data.get("stage", "regular")
+        match_uids = [uid for uid, _, _ in player_entries]
+        
+        is_finals_match = (stage == "finals" and all(ctx_data.get(u, {}).get("is_finalist") for u in match_uids))
+        is_playoffs_match = (not is_finals_match and stage in ["playoffs", "finals"] and all(ctx_data.get(u, {}).get("is_playoff_qualifier") for u in match_uids))
+        
+        if is_finals_match:
+            header_str = "🀄️ 对局结束 (总决赛补录)"
+        elif is_playoffs_match:
+            header_str = "🀄️ 对局结束 (季后赛补录)"
+        else:
+            header_str = "🀄️ 对局结束 (常规补录)"
+
+        result_msg = [header_str]
+
+        # 6. 排序与 M规 马点计算 (+50/+10/-10/-30，返点30000，同分平分马点)
+        sorted_players = sorted(player_entries, key=lambda x: x[2], reverse=True)
+        UMA_SLOTS = [50.0, 10.0, -10.0, -30.0]
+        ICONS = ["🥇", "🥈", "🥉", "💀"]
+
+        i = 0
+        while i < len(sorted_players):
+            j = i + 1
+            while j < len(sorted_players) and sorted_players[j][2] == sorted_players[i][2]:
+                j += 1
+            
+            current_umas = UMA_SLOTS[i:j]
+            avg_uma = sum(current_umas) / len(current_umas)
+
+            for k in range(i, j):
+                uid, name, s = sorted_players[k]
+                base_pt = (s - 30000) / 1000.0
+                final_pt = round(base_pt + avg_uma, 1)
+                pt_str = f"+{final_pt}" if final_pt > 0 else f"{final_pt}"
+
+                user_stat = ctx_data.setdefault(uid, {
+                    "name": name, "total_pt": 0.0, "total_matches": 0,
+                    "ranks": [0, 0, 0, 0], "max_score": 0, "total_score": 0, "avoid_4_rate": 0.0,
+                    "regular_matches": 0, "regular_counted_pt": 0.0
+                })
+
+                # 兼容历史缺漏字段
+                if "total_score" not in user_stat: user_stat["total_score"] = 0
+                if "regular_matches" not in user_stat: user_stat["regular_matches"] = user_stat["total_matches"]
+                if "regular_counted_pt" not in user_stat: user_stat["regular_counted_pt"] = user_stat["total_pt"]
+                if "ranks" not in user_stat or not isinstance(user_stat["ranks"], list): user_stat["ranks"] = [0, 0, 0, 0]
+                if "max_score" not in user_stat: user_stat["max_score"] = 0
+
+                # 始终更新生涯数据 (方便查鱼与天凤段位同步)
+                user_stat["name"] = name
+                user_stat["total_pt"] = round(user_stat["total_pt"] + final_pt, 1)
+                user_stat["total_matches"] += 1
+                user_stat["ranks"][i] += 1
+                user_stat["total_score"] += s
+                if s > user_stat["max_score"]: user_stat["max_score"] = s
+                not_4th_count = sum(user_stat["ranks"][:3])
+                user_stat["avoid_4_rate"] = round((not_4th_count / user_stat["total_matches"]) * 100, 2)
+
+                extra_note = ""
+                # 赛制逻辑分支
+                if is_finals_match:
+                    user_stat["finals_matches"] = user_stat.get("finals_matches", 0) + 1
+                    user_stat["finals_pt"] = round(user_stat.get("finals_pt", 0.0) + final_pt, 1)
+                    extra_note = f" [决赛:{user_stat['finals_pt']}pt]"
+                elif is_playoffs_match:
+                    user_stat["playoff_matches"] = user_stat.get("playoff_matches", 0) + 1
+                    if user_stat["playoff_matches"] <= 10:
+                        user_stat["playoff_pt"] = round(user_stat.get("playoff_pt", 0.0) + final_pt, 1)
+                        extra_note = f" [季后赛:{user_stat['playoff_matches']}/10战]"
+                    else:
+                        extra_note = " [季后赛已满10战]"
+                else:
+                    # 常规赛：前 60 战计入排位
+                    user_stat["regular_matches"] += 1
+                    if user_stat["regular_matches"] <= 60:
+                        user_stat["regular_counted_pt"] = round(user_stat["regular_counted_pt"] + final_pt, 1)
+                    else:
+                        extra_note = " (超60战不计排位)"
+
+                result_msg.append(f"{ICONS[i]} {name}: {s} ({pt_str}pt){extra_note}")
+            i = j
+
+        self._save_data()
+        yield event.plain_result("\n".join(result_msg))
+
+    # -------------------------------------------------------
     # 📊 排行榜与个人数据面板
     # -------------------------------------------------------
 
@@ -1031,6 +1187,144 @@ class MahjongPlugin(Star):
             yield event.plain_result("\n".join(result_msg))
         else:
             yield event.plain_result(f"💾 活动分数已记录 ({submitted_count}/4)")
+
+    # -------------------------------------------------------
+    # 🛠️ 活动管理运维工具 (清空数据 & 强制补录)
+    # -------------------------------------------------------
+
+    @command("mj_event_reset", alias=["活动清空", "活动重置", "清空活动数据"])
+    async def reset_event_data(self, event: AstrMessageEvent):
+        """[管理员] 完全清空当前群的活动场数据（清除旧活动残留）"""
+        ctx_id = self._get_context_id(event)
+        
+        # 1. 清理内存中可能卡住的活动对局
+        if ctx_id in self.event_matches:
+            del self.event_matches[ctx_id]
+            
+        # 2. 清空该群持久化的活动战绩
+        if "groups" in self.event_data and ctx_id in self.event_data["groups"]:
+            self.event_data["groups"][ctx_id] = {}
+            self._save_event_data()
+            yield event.plain_result("🔄 本群【活动场】数据已完全清空！所有历史活动战绩已归零。")
+        else:
+            yield event.plain_result("⚠️ 当前群组暂无活动数据，无需清空。")
+
+    @command("mj_event_manual", alias=["活动补录", "活动录分", "强制录分", "活动强制录分"])
+    async def record_event_manual(self, event: AstrMessageEvent):
+        """
+        [管理员] 强制/手动录入一次活动场成绩
+        用法支持以下两种格式（点数按@的顺序对应）：
+          格式1: /活动补录 @选手A 35000 @选手B 30000 @选手C 20000 @选手D 15000
+          格式2: /活动补录 @选手A @选手B @选手C @选手D 35000 30000 20000 15000
+        """
+        ctx_id = self._get_context_id(event)
+        
+        # 1. 提取被 @ 的 4 位选手
+        target_uids = []
+        for comp in event.get_messages():
+            if isinstance(comp, At):
+                target_uids.append(str(comp.qq))
+        
+        # 顺序去重
+        unique_uids = list(dict.fromkeys(target_uids))
+        if len(unique_uids) != 4:
+            yield event.plain_result(
+                "⚠️ 格式错误！必须同时 @ 4 位不同的选手。\n"
+                "👉 正确示例：\n"
+                "/活动补录 @选手1 35000 @选手2 30000 @选手3 20000 @选手4 15000\n"
+                "或\n"
+                "/活动补录 @选手1 @选手2 @选手3 @选手4 35000 30000 20000 15000"
+            )
+            return
+
+        # 2. 从文本中提取 4 个点数
+        plain_texts = []
+        for comp in event.get_messages():
+            if not isinstance(comp, At) and hasattr(comp, 'text'):
+                plain_texts.append(comp.text)
+        
+        combined_text = " ".join(plain_texts)
+        for cmd in ["/mj_event_manual", "/活动补录", "/活动录分", "/强制录分", "/活动强制录分"]:
+            combined_text = combined_text.replace(cmd, "")
+            
+        scores_raw = re.findall(r'-?\d+', combined_text)
+        if len(scores_raw) != 4:
+            yield event.plain_result(f"⚠️ 点数数量不匹配！检测到 {len(scores_raw)} 个有效数值，必须依次提供 4 家的点数。")
+            return
+
+        scores = [int(s) for s in scores_raw]
+        
+        # 3. 校验总和 100000 (JOJO活动场: 25000持点*4)
+        total_score = sum(scores)
+        if total_score != 100000:
+            diff = total_score - 100000
+            diff_str = f"+{diff}" if diff > 0 else f"{diff}"
+            yield event.plain_result(
+                f"⚠️ 点数核对不通过！\n"
+                f"四家点数总和为: {total_score} (误差 {diff_str})\n"
+                f"目标总和: 100000 (2.5w持点*4)\n"
+                f"👉 请检查点数是否有误。"
+            )
+            return
+
+        # 4. 获取选手昵称并配对
+        ctx_data = self.event_data.setdefault("groups", {}).setdefault(ctx_id, {})
+        player_entries = []
+        for uid, s in zip(unique_uids, scores):
+            name = f"用户{uid}"
+            if uid in ctx_data and ctx_data[uid].get("name"):
+                name = ctx_data[uid]["name"]
+            elif hasattr(self, "data") and ctx_id in self.data and uid in self.data[ctx_id]:
+                name = self.data[ctx_id][uid].get("name", name)
+            player_entries.append((uid, name, s))
+
+        # 5. 排序与马点计算 (+50/+15/-15/-30，返点30000，同分平分马点)
+        sorted_players = sorted(player_entries, key=lambda x: x[2], reverse=True)
+        UMA_SLOTS = [50.0, 15.0, -15.0, -30.0]
+        ICONS = ["🥇", "🥈", "🥉", "💀"]
+        result_msg = ["🃏 **【活动场·成绩手动补录完成】**", "--------------------------------"]
+
+        i = 0
+        while i < len(sorted_players):
+            j = i + 1
+            while j < len(sorted_players) and sorted_players[j][2] == sorted_players[i][2]:
+                j += 1
+            
+            current_umas = UMA_SLOTS[i:j]
+            avg_uma = sum(current_umas) / len(current_umas)
+
+            for k in range(i, j):
+                uid, name, s = sorted_players[k]
+                base_pt = (s - 30000) / 1000.0
+                pt = round(base_pt + avg_uma, 1)
+                pt_str = f"+{pt}" if pt > 0 else f"{pt}"
+
+                user_stat = ctx_data.setdefault(uid, {
+                    "name": name, "total_pt": 0.0, "total_matches": 0,
+                    "total_score": 0, "max_score": 0, "ranks": [0, 0, 0, 0]
+                })
+                if "ranks" not in user_stat or not isinstance(user_stat["ranks"], list):
+                    user_stat["ranks"] = [0, 0, 0, 0]
+                if "max_score" not in user_stat:
+                    user_stat["max_score"] = 0
+                if "total_score" not in user_stat:
+                    user_stat["total_score"] = 0
+
+                user_stat["name"] = name
+                user_stat["total_pt"] = round(user_stat["total_pt"] + pt, 1)
+                user_stat["total_matches"] += 1
+                user_stat["total_score"] += s
+                user_stat["ranks"][i] += 1
+                if s > user_stat.get("max_score", 0):
+                    user_stat["max_score"] = s
+
+                result_msg.append(f"{ICONS[i]} {name}: {s} ({pt_str}pt)")
+            i = j
+
+        self._save_event_data()
+        result_msg.append("--------------------------------")
+        result_msg.append("✅ 战绩已成功写入【声优吃的奇妙冒险】活动榜！")
+        yield event.plain_result("\n".join(result_msg))
 
     @command("mj_event_rank", alias=["活动榜", "活动排行", "活动rank"])
     async def show_event_rank(self, event: AstrMessageEvent):
