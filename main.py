@@ -823,8 +823,18 @@ class MahjongPlugin(Star):
         while str(match_id) in self.event_matches[ctx_id]:
             match_id += 1
         match_id = str(match_id)
+
+        # 随机抽取 6 个候选替身能力
+        selected_stands = random.sample(self.STAND_POWERS, 6)
+
+        self.event_matches[ctx_id][match_id] = {
+            "players": {user_id: user_name},
+            "scores": {},
+            "status": "recruiting",
+            "stands": selected_stands
+        }
         
-        # 常规开桌信息
+        # 消息1：常规开桌信息
         yield event.plain_result(
             f"🃏 活动场 #{match_id} 已建立！\n"
             f"替身使者 {user_name} 已就位！ (1/4)\n"
@@ -832,7 +842,18 @@ class MahjongPlugin(Star):
             f"(多桌同开时请发送 /活动加入 {match_id} 加入本桌)"
         )
 
+        # 消息2：单独发送抽中的 6 个替身能力清单
+        stand_lines = [
+            f"🔮 **【活动场 #{match_id} 可选 STAND POWER】**",
+            "----------------------------------------"
+        ]
+        for idx, (s_name, s_desc) in enumerate(selected_stands):
+            stand_lines.append(f"{idx+1}. 「{s_name}」\n   {s_desc}")
+        stand_lines.append("----------------------------------------")
+        stand_lines.append("📌 挑选顺序：北家 ➔ 西家 ➔ 南家 ➔ 东家")
+        stand_lines.append("（对局集结后依序选择，回合内喊出替身名即可发动！）")
 
+        yield event.plain_result("\n".join(stand_lines))
 
     @command("mj_event_join", alias=["活动加入"])
     async def join_event_match(self, event: AstrMessageEvent, match_id: str = ""):
@@ -901,29 +922,6 @@ class MahjongPlugin(Star):
                 f"👉 **北家 ({wind_map['北']}) ➔ 西家 ({wind_map['西']}) ➔ 南家 ({wind_map['南']}) ➔ 东家 ({wind_map['东']})**\n\n"
                 f"🏁 对局结束后请发送：/活动得点 [点数]"
             )
-    
-            # 随机抽取 6 个候选替身能力
-            selected_stands = random.sample(self.STAND_POWERS, 6)
-    
-            self.event_matches[ctx_id][match_id] = {
-                "players": {user_id: user_name},
-                "scores": {},
-                "status": "recruiting",
-                "stands": selected_stands
-            }
-                
-            # 单独发送抽中的 6 个替身能力清单
-            stand_lines = [
-                f"🔮 【活动场 #{match_id} 可选「STAND POWER」】",
-                "----------------------------------------"
-            ]
-            for idx, (s_name, s_desc) in enumerate(selected_stands):
-                stand_lines.append(f"{idx+1}. 「{s_name}」\n   {s_desc}")
-            stand_lines.append("----------------------------------------")
-            stand_lines.append("📌 挑选顺序：北家 ➔ 西家 ➔ 南家 ➔ 东家")
-    
-            yield event.plain_result("\n".join(stand_lines))
-            
         else:
             yield event.plain_result(f"替身使者 {user_name} 加入活动局 #{target_mid} ！ ({current_count}/4)")
 
@@ -1042,7 +1040,7 @@ class MahjongPlugin(Star):
         # 按活动总PT从高到低排序
         users.sort(key=lambda x: x["total_pt"], reverse=True)
 
-        msg = ["🏆 【声优吃的奇妙冒险】活动战力榜 🏆\n"]
+        msg = ["🏆 **【声优吃的奇妙冒险】活动战力榜** 🏆\n"]
         for i, u in enumerate(users):
             avg_pts = int(u["total_score"] / u["total_matches"]) if u["total_matches"] > 0 else 0
             msg.append(f" {i+1}. {u['name']} — {u['total_pt']} pt [试合:{u['total_matches']} | 均点:{avg_pts} | 最高:{u.get('max_score', 0)}]")
