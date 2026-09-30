@@ -1003,6 +1003,15 @@ class MahjongPlugin(Star):
                         "total_score": 0, "max_score": 0, "ranks": [0, 0, 0, 0]
                     })
 
+                    if "ranks" not in user_stat or not isinstance(user_stat["ranks", list]):
+                        user_stat["ranks"] = [0,0,0,0]
+
+                    if "max_score" not in user_stat:
+                        user_stat["max_score"] = 0
+                        
+                    if "total_score" not in user_stat:
+                        user_stat["total_score"] = 0
+
                     user_stat["name"] = username
                     user_stat["total_pt"] = round(user_stat["total_pt"] + pt, 1)
                     user_stat["total_matches"] += 1
