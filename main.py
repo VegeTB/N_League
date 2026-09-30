@@ -4,6 +4,7 @@ import json
 from astrbot.api.message_components import At
 import os
 import logging
+import re
 import random
 from typing import Dict, List, Any
 
